@@ -101,9 +101,7 @@ class RecordAddon:
         if is_sse_response(clean_resp_headers):
             resp_payload["chunks"] = parse_sse_chunks(resp_body)
             step.is_streaming = True
-        step.resp_blob = self._blobs.write(
-            json.dumps(resp_payload, sort_keys=True).encode()
-        )
+        step.resp_blob = self._blobs.write(json.dumps(resp_payload, sort_keys=True).encode())
         step.input_tok, step.output_tok = _parse_token_counts(resp_body)
 
         self._db.save_step(step)

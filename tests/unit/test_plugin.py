@@ -60,9 +60,7 @@ def test_export_embeds_all_blobs(tmp_path: Path) -> None:
     db, blobs, sid = _make_db_with_session(tmp_path)
     cassette = export_cassette(db, blobs, sid)
     steps = db.get_steps(sid)
-    expected_hashes = {
-        h for s in steps for h in (s.req_blob, s.resp_blob) if h is not None
-    }
+    expected_hashes = {h for s in steps for h in (s.req_blob, s.resp_blob) if h is not None}
     assert set(cassette["blobs"].keys()) == expected_hashes
 
 

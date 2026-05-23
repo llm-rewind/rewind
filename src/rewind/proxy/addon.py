@@ -40,6 +40,7 @@ async def run_record_proxy(
     master.addons.add(RecordAddon(db, blobs, session_id))  # type: ignore[no-untyped-call]
 
     if _stop is not None:
+
         async def _waiter() -> None:
             await _stop.wait()
             master.shutdown()  # type: ignore[no-untyped-call]
@@ -79,6 +80,7 @@ async def run_replay_proxy(
     master.addons.add(ReplayAddon(db, blobs, session_id, permissive=permissive))  # type: ignore[no-untyped-call]
 
     if _stop is not None:
+
         async def _waiter() -> None:
             await _stop.wait()
             master.shutdown()  # type: ignore[no-untyped-call]

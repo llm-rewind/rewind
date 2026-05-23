@@ -38,7 +38,7 @@ class Step(BaseModel):
     provider: str | None = None
     model: str | None = None
     match_key: str | None = None
-    req_blob: str | None = None   # SHA-256 hash
+    req_blob: str | None = None  # SHA-256 hash
     resp_blob: str | None = None  # SHA-256 hash
     input_tok: int = 0
     output_tok: int = 0

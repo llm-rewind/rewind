@@ -47,9 +47,7 @@ def current_session() -> ToolContext | None:
 def _compute_input_hash(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     """Stable SHA-256 fingerprint of a function call's arguments."""
     payload = {"args": list(args), "kwargs": kwargs}
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 @overload
@@ -59,6 +57,7 @@ def tool(fn: Callable[_P, _R]) -> Callable[_P, _R]: ...
 def tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a Python function for Rewind tool recording/replay."""
     if inspect.iscoroutinefunction(fn):
+
         @functools.wraps(fn)
         async def _async(*args: Any, **kwargs: Any) -> Any:
             ctx = _TOOL_CTX.get()

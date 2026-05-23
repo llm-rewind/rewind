@@ -13,10 +13,10 @@ from rewind.storage.db import RewindDB, Step
 class BisectResult:
     session_id_a: str
     session_id_b: str
-    diverged_at: int | None        # order_idx of first divergence, None if identical
-    step_a: Step | None            # step from session A at divergence point
-    step_b: Step | None            # step from session B at divergence point
-    model_changed: bool            # True if model differs between the two steps
+    diverged_at: int | None  # order_idx of first divergence, None if identical
+    step_a: Step | None  # step from session A at divergence point
+    step_b: Step | None  # step from session B at divergence point
+    model_changed: bool  # True if model differs between the two steps
     total_steps_a: int
     total_steps_b: int
 

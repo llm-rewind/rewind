@@ -29,9 +29,7 @@ def normalize_request(method: str, path: str, body: bytes) -> str:
         except (json.JSONDecodeError, ValueError):
             canonical["body_raw"] = body.hex()
 
-    canonical_str = json.dumps(
-        canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
+    canonical_str = json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical_str.encode()).hexdigest()
 
 

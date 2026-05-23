@@ -1,0 +1,39 @@
+{
+  "blobs": {
+    "7d59f39eb39ad431d6956712afafc8cea804b3a123774f73e8c67cb8ae2dd00d": "eyJib2R5Ijp7Im1heF90b2tlbnMiOjEwMCwibWVzc2FnZXMiOlt7ImNvbnRlbnQiOiJTYXkgZXhhY3RseTogaGVsbG8gZnJvbSByZXdpbmQgdGVzdCIsInJvbGUiOiJ1c2VyIn1dLCJtb2RlbCI6ImNsYXVkZS1oYWlrdS00LTUtMjAyNTEwMDEifSwiaGVhZGVycyI6eyJhbnRocm9waWMtdmVyc2lvbiI6IjIwMjMtMDYtMDEiLCJjb250ZW50LXR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIn0sIm1ldGhvZCI6IlBPU1QiLCJwYXRoIjoiL3YxL21lc3NhZ2VzIn0=",
+    "985038b083a660811bfb1bde908300925828a8ae05a0182d941186003160d771": "eyJjb250ZW50IjpbeyJ0ZXh0IjoiaGVsbG8gZnJvbSByZXdpbmQgdGVzdCIsInR5cGUiOiJ0ZXh0In1dLCJpZCI6Im1zZ19zeW50aF9yZXdpbmRfMDEiLCJtb2RlbCI6ImNsYXVkZS1oYWlrdS00LTUtMjAyNTEwMDEiLCJyb2xlIjoiYXNzaXN0YW50Iiwic3RvcF9yZWFzb24iOiJlbmRfdHVybiIsInN0b3Bfc2VxdWVuY2UiOm51bGwsInR5cGUiOiJtZXNzYWdlIiwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjoyMCwib3V0cHV0X3Rva2VucyI6Nn19"
+  },
+  "session": {
+    "agent_name": "simple_agent",
+    "command": "python tests/agents/simple_agent.py",
+    "ended_at": "2026-05-23T14:35:29.687021+00:00",
+    "git_hash": null,
+    "id": "0d6724ac-0303-4fae-be45-609e96e77727",
+    "metadata": {
+      "note": "generated without live API key",
+      "synthetic": true
+    },
+    "started_at": "2026-05-23T14:35:29.687021+00:00",
+    "total_cost_usd": 6.3e-05
+  },
+  "steps": [
+    {
+      "id": "fe69e39f-3ef9-4fb7-9a2c-08df2fe8b9d5",
+      "input_tok": 20,
+      "is_streaming": false,
+      "latency_ms": 312,
+      "match_key": "9cef1ac6935d0f68c88e3c2f53109adf4a2cdcb5b031d611d4cd51c377459813",
+      "model": "claude-haiku-4-5-20251001",
+      "order_idx": 0,
+      "output_tok": 6,
+      "parent_id": null,
+      "provider": "anthropic",
+      "req_blob": "7d59f39eb39ad431d6956712afafc8cea804b3a123774f73e8c67cb8ae2dd00d",
+      "resp_blob": "985038b083a660811bfb1bde908300925828a8ae05a0182d941186003160d771",
+      "session_id": "0d6724ac-0303-4fae-be45-609e96e77727",
+      "started_at": "2026-05-23T14:35:29.687021+00:00",
+      "type": "llm_call"
+    }
+  ],
+  "version": 1
+}

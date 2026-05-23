@@ -13,9 +13,9 @@ from rewind.storage.db import RewindDB, Step
 
 class DiffStatus(StrEnum):
     MATCH = "match"
-    DIVERGED = "diverged"   # same order_idx, different resp_blob content
-    ADDED = "added"         # exists in B but not A (session B longer)
-    REMOVED = "removed"     # exists in A but not B (session A longer)
+    DIVERGED = "diverged"  # same order_idx, different resp_blob content
+    ADDED = "added"  # exists in B but not A (session B longer)
+    REMOVED = "removed"  # exists in A but not B (session A longer)
 
 
 @dataclass
@@ -37,9 +37,7 @@ class SessionDiff:
 
     @property
     def first_divergence(self) -> StepDiff | None:
-        return next(
-            (s for s in self.steps if s.status != DiffStatus.MATCH), None
-        )
+        return next((s for s in self.steps if s.status != DiffStatus.MATCH), None)
 
     @property
     def is_identical(self) -> bool:

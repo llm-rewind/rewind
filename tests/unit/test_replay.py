@@ -154,14 +154,16 @@ def test_replay_multiple_calls_served_in_order(tmp_path: pytest.TempdirFactory) 
     for i, answer in enumerate(["first", "second"]):
         resp_payload = {"status_code": 200, "headers": {}, "body": answer}
         resp_blob = blobs.write(json.dumps(resp_payload).encode())
-        db.save_step(Step(
-            session_id=session.id,
-            order_idx=i,
-            type="llm_call",
-            match_key=match_key,
-            req_blob=req_blob,
-            resp_blob=resp_blob,
-        ))
+        db.save_step(
+            Step(
+                session_id=session.id,
+                order_idx=i,
+                type="llm_call",
+                match_key=match_key,
+                req_blob=req_blob,
+                resp_blob=resp_blob,
+            )
+        )
 
     addon = ReplayAddon(db, blobs, session.id)
 
@@ -236,14 +238,16 @@ def test_replay_steps_without_resp_blob_skipped(tmp_path: pytest.TempdirFactory)
     match_key = normalize_request("POST", "/v1/chat/completions", req_body)
 
     # Step with no resp_blob
-    db.save_step(Step(
-        session_id=session.id,
-        order_idx=0,
-        type="llm_call",
-        match_key=match_key,
-        req_blob=None,
-        resp_blob=None,
-    ))
+    db.save_step(
+        Step(
+            session_id=session.id,
+            order_idx=0,
+            type="llm_call",
+            match_key=match_key,
+            req_blob=None,
+            resp_blob=None,
+        )
+    )
 
     addon = ReplayAddon(db, blobs, session.id)
     flow = _make_flow(body=req_body)

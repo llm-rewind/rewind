@@ -67,8 +67,7 @@ def rewind_cassette(
             # Record mode — test runs live; cassette saved after by the test itself
             return None
         pytest.fail(
-            f"Cassette not found: {cassette_path}\n"
-            "Run with REWIND_RECORD_MODE=record to create it."
+            f"Cassette not found: {cassette_path}\nRun with REWIND_RECORD_MODE=record to create it."
         )
 
     # Replay mode — load cassette into an in-memory DB + tmp blob store
