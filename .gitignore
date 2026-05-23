@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Type checking
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Local Rewind data — NEVER commit ~/.rewind contents here
+# If someone copies the project dir, don't include local cassette DB
+.rewind/
+
+# Real cassettes with actual user data (committed test cassettes go in tests/cassettes/)
+*.rw.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution
+dist/
+build/

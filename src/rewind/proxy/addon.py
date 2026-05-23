@@ -1,0 +1,53 @@
+"""mitmproxy DumpMaster lifecycle management.
+
+Embeds mitmproxy as a library (not a subprocess) using the DumpMaster + addon API.
+See ADR-001 for why HTTP proxy over SDK monkey-patching.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+from rewind.constants import DEFAULT_PROXY_PORT, PROXY_HOST, REWIND_DIR
+from rewind.proxy.record import RecordAddon
+from rewind.storage.blobs import BlobStore
+from rewind.storage.db import RewindDB
+
+
+async def run_record_proxy(
+    db: RewindDB,
+    blobs: BlobStore,
+    session_id: str,
+    *,
+    host: str = PROXY_HOST,
+    port: int = DEFAULT_PROXY_PORT,
+    confdir: Path = REWIND_DIR,
+    _stop: asyncio.Event | None = None,
+) -> None:
+    """Run mitmproxy with RecordAddon. Blocks until _stop is set or KeyboardInterrupt."""
+    from mitmproxy.options import Options
+    from mitmproxy.tools.dump import DumpMaster
+
+    opts = Options(
+        listen_host=host,
+        listen_port=port,
+        confdir=str(confdir),
+        ssl_insecure=False,
+    )
+    master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+    master.addons.add(RecordAddon(db, blobs, session_id))  # type: ignore[no-untyped-call]
+
+    if _stop is not None:
+        async def _waiter() -> None:
+            await _stop.wait()
+            master.shutdown()  # type: ignore[no-untyped-call]
+
+        asyncio.create_task(_waiter())
+
+    try:
+        await master.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        master.shutdown()  # type: ignore[no-untyped-call]
