@@ -1,0 +1,71 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more concrete the
+        reproduction, the faster this gets fixed.
+
+  - type: input
+    id: version
+    attributes:
+      label: Rewind version
+      description: Output of `pip show llm-rewind` or `rewind --version`
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python --version`
+      placeholder: "3.12.3"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 14.4 / Ubuntu 22.04 / Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Plain English. What did you run, what did you expect, what did you see instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest commands or code that trigger the bug. Trim it.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or stack trace
+      description: Paste the actual error, not your summary of it. Use a code block.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I confirmed this with the latest release
+          required: true
+        - label: No API keys or other secrets appear in the logs I pasted
+          required: true

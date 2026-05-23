@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose a new capability or behavior change
+labels: [enhancement, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: skim CHANGELOG.md and open PRs. If your idea already
+        exists somewhere, link it instead of duplicating.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do today, and why does that matter for your workflow?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How you would solve it. Sketch the CLI shape, API, or config.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you try or rule out, and why was each insufficient?
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - CLI command or flag
+        - Proxy capture or replay logic
+        - Storage or cassette format
+        - SDK decorator
+        - pytest plugin
+        - Documentation
+        - Other
+    validations:
+      required: true
