@@ -30,6 +30,7 @@ def test_normalize_returns_sha256_hex() -> None:
 @pytest.mark.unit
 def test_normalize_strips_tool_call_id() -> None:
     """tool_call_id is volatile — same logical request should produce same key."""
+
     def make_body(tid: str) -> bytes:
         return json.dumps(
             {
@@ -46,6 +47,7 @@ def test_normalize_strips_tool_call_id() -> None:
 @pytest.mark.unit
 def test_normalize_strips_tool_call_ids_in_tool_calls() -> None:
     """tool_calls[].id is volatile and must be stripped."""
+
     def make_body(tid: str) -> bytes:
         return json.dumps(
             {

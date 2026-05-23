@@ -115,9 +115,7 @@ def _dict_to_session(d: dict[str, Any]) -> Session:
         git_hash=d.get("git_hash"),
         command=d.get("command"),
         started_at=(
-            datetime.fromisoformat(d["started_at"])
-            if d.get("started_at")
-            else datetime.now(UTC)
+            datetime.fromisoformat(d["started_at"]) if d.get("started_at") else datetime.now(UTC)
         ),
         ended_at=(datetime.fromisoformat(d["ended_at"]) if d.get("ended_at") else None),
         total_cost_usd=float(d.get("total_cost_usd", 0.0)),
@@ -161,9 +159,7 @@ def _dict_to_step(d: dict[str, Any]) -> Step:
         output_tok=int(d.get("output_tok", 0)),
         latency_ms=int(d.get("latency_ms", 0)),
         started_at=(
-            datetime.fromisoformat(d["started_at"])
-            if d.get("started_at")
-            else datetime.now(UTC)
+            datetime.fromisoformat(d["started_at"]) if d.get("started_at") else datetime.now(UTC)
         ),
         is_streaming=bool(d.get("is_streaming", False)),
     )

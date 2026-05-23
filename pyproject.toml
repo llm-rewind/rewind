@@ -47,6 +47,7 @@ rewind = "rewind.cli:cli"
 [project.urls]
 Homepage = "https://github.com/rewind-ai/rewind"
 Repository = "https://github.com/rewind-ai/rewind"
+Documentation = "https://github.com/rewind-ai/rewind/blob/master/docs/ARCHITECTURE.md"
 "Bug Tracker" = "https://github.com/rewind-ai/rewind/issues"
 
 [project.entry-points."pytest11"]

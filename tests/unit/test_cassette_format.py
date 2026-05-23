@@ -23,9 +23,7 @@ def _populated_db(tmp_path: Path) -> tuple[RewindDB, BlobStore, str]:
     req_bytes = json.dumps(
         {"method": "POST", "headers": {}, "body": {"model": "gpt-4o", "messages": []}}
     ).encode()
-    resp_bytes = json.dumps(
-        {"status_code": 200, "headers": {}, "body": '{"choices":[]}'}
-    ).encode()
+    resp_bytes = json.dumps({"status_code": 200, "headers": {}, "body": '{"choices":[]}'}).encode()
 
     req_blob = blobs.write(req_bytes)
     resp_blob = blobs.write(resp_bytes)

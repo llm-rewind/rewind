@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+    branches: ["master", "main"]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check src/ tests/ pytest_rewind/
+
+      - name: Format check (ruff)
+        run: ruff format src/ tests/ pytest_rewind/ --check
+
+      - name: Type check (mypy --strict)
+        run: mypy src/ pytest_rewind/ --strict
+
+      - name: Test (no API keys — cassettes only)
+        run: pytest -v
+        env:
+          # Explicitly unset to ensure no live LLM calls sneak in
+          ANTHROPIC_API_KEY: ""
+          OPENAI_API_KEY: ""
+          GEMINI_API_KEY: ""

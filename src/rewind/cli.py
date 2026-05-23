@@ -544,8 +544,7 @@ def import_session(path: str) -> None:
 
     step_count = len(data.get("steps", []))
     console.print(
-        f"[green]Imported[/green] session [bold]{session_id[:8]}...[/bold] "
-        f"({step_count} steps)"
+        f"[green]Imported[/green] session [bold]{session_id[:8]}...[/bold] ({step_count} steps)"
     )
 
 
