@@ -434,7 +434,60 @@ def inspect(session_id: str, verbose: bool) -> None:
 @click.argument("session_id_b")
 def diff(session_id_a: str, session_id_b: str) -> None:
     """Diff two recorded sessions step by step."""
-    console.print("[yellow]not implemented yet[/yellow]")
+    from rich.table import Table
+
+    from rewind.engines.diff import DiffStatus, diff_sessions
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB.get_or_create()
+    blobs = BlobStore()
+    result = diff_sessions(db, blobs, session_id_a, session_id_b)
+
+    if result.is_identical:
+        console.print(
+            f"[green]✓[/green] Sessions [cyan]{session_id_a[:8]}[/cyan] and "
+            f"[cyan]{session_id_b[:8]}[/cyan] are [bold]identical[/bold]."
+        )
+        return
+
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("#", justify="right", width=3)
+    table.add_column("Status", width=10)
+    table.add_column("Model A", width=22)
+    table.add_column("Model B", width=22)
+    table.add_column("Resp A", width=12, style="dim")
+    table.add_column("Resp B", width=12, style="dim")
+
+    status_style = {
+        DiffStatus.MATCH: "dim",
+        DiffStatus.DIVERGED: "red",
+        DiffStatus.ADDED: "yellow",
+        DiffStatus.REMOVED: "yellow",
+    }
+
+    for sd in result.steps:
+        style = status_style[sd.status]
+        model_a = (sd.step_a.model or "—") if sd.step_a else "—"
+        model_b = (sd.step_b.model or "—") if sd.step_b else "—"
+        blob_a = (sd.step_a.resp_blob or "")[:10] if sd.step_a else "—"
+        blob_b = (sd.step_b.resp_blob or "")[:10] if sd.step_b else "—"
+        table.add_row(
+            str(sd.order_idx),
+            f"[{style}]{sd.status.value}[/{style}]",
+            model_a,
+            model_b,
+            blob_a,
+            blob_b,
+        )
+
+    console.print(table)
+    first = result.first_divergence
+    if first:
+        console.print(
+            f"\nFirst divergence at step [cyan]{first.order_idx}[/cyan]. "
+            f"Run [cyan]rewind bisect {session_id_a[:8]} {session_id_b[:8]}[/cyan] for root cause."
+        )
 
 
 @cli.command()
@@ -442,7 +495,14 @@ def diff(session_id_a: str, session_id_b: str) -> None:
 @click.argument("session_id_b")
 def bisect(session_id_a: str, session_id_b: str) -> None:
     """Find the exact step where two sessions diverged."""
-    console.print("[yellow]not implemented yet[/yellow]")
+    from rewind.engines.bisect import bisect_sessions
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB.get_or_create()
+    blobs = BlobStore()
+    result = bisect_sessions(db, blobs, session_id_a, session_id_b)
+    console.print(result.summary())
 
 
 @cli.command(name="export")
