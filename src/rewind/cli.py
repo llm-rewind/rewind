@@ -113,7 +113,7 @@ def _generate_ca(rewind_dir: Path) -> None:
 
 
 @click.group()
-@click.version_option()
+@click.version_option(package_name="llm-rewind")
 def cli() -> None:
     """Rewind — time-travel debugger for AI agents.
 
