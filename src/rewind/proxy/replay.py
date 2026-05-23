@@ -14,6 +14,7 @@ from mitmproxy import http
 from rewind.constants import PROVIDER_HOSTS
 from rewind.exceptions import CassetteMissError
 from rewind.proxy.normalize import normalize_request
+from rewind.proxy.streaming import reconstruct_sse_body
 from rewind.storage.blobs import BlobStore
 from rewind.storage.db import RewindDB, Step
 
@@ -66,8 +67,14 @@ class ReplayAddon:
         resp_bytes = self._blobs.read(step.resp_blob)  # SHA-256 verified on every read
         resp_data = json.loads(resp_bytes)
 
+        headers: dict[str, str] = resp_data.get("headers", {})
+        if step.is_streaming and "chunks" in resp_data:
+            body_bytes = reconstruct_sse_body(resp_data["chunks"])
+        else:
+            body_bytes = resp_data.get("body", "").encode("utf-8")
+
         flow.response = http.Response.make(
             status_code=int(resp_data.get("status_code", 200)),
-            content=resp_data.get("body", "").encode("utf-8"),
-            headers=resp_data.get("headers", {}),
+            content=body_bytes,
+            headers=headers,
         )

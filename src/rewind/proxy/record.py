@@ -11,6 +11,7 @@ from mitmproxy import http
 
 from rewind.constants import PROVIDER_HOSTS
 from rewind.proxy.normalize import normalize_request, strip_headers
+from rewind.proxy.streaming import is_sse_response, parse_sse_chunks
 from rewind.storage.blobs import BlobStore
 from rewind.storage.db import RewindDB, Step
 
@@ -91,11 +92,15 @@ class RecordAddon:
         step.latency_ms = int((time.monotonic() - t0) * 1000)
 
         resp_body = flow.response.content or b""
+        clean_resp_headers = strip_headers(dict(flow.response.headers))
         resp_payload: dict[str, Any] = {
             "status_code": flow.response.status_code,
-            "headers": strip_headers(dict(flow.response.headers)),
+            "headers": clean_resp_headers,
             "body": resp_body.decode("utf-8", errors="replace"),
         }
+        if is_sse_response(clean_resp_headers):
+            resp_payload["chunks"] = parse_sse_chunks(resp_body)
+            step.is_streaming = True
         step.resp_blob = self._blobs.write(
             json.dumps(resp_payload, sort_keys=True).encode()
         )
