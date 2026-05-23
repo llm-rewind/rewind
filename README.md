@@ -21,8 +21,8 @@ $ rewind bisect run-good-7f3a run-bad-9b2c
   Steps matched: 3 / 12
 ```
 
-[![CI](https://github.com/rewind-ai/rewind/actions/workflows/tests.yml/badge.svg)](https://github.com/rewind-ai/rewind/actions/workflows/tests.yml)
-[![PyPI](https://img.shields.io/pypi/v/rewind-ai)](https://pypi.org/project/rewind-ai/)
+[![CI](https://github.com/llm-rewind/rewind/actions/workflows/tests.yml/badge.svg)](https://github.com/llm-rewind/rewind/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/llm-rewind)](https://pypi.org/project/llm-rewind/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -58,7 +58,7 @@ rewind export 7f3a2b --output incident-8821.rw
 ## Install
 
 ```bash
-pip install rewind-ai
+pip install llm-rewind
 rewind init      # generates local CA cert for HTTPS interception
 ```
 
@@ -147,7 +147,7 @@ def search_database(query: str) -> list[dict]:
 ## pytest Integration
 
 ```python
-# Install: pip install rewind-ai
+# Install: pip install llm-rewind
 
 @pytest.mark.rewind(cassette="tests/cassettes/customer_support.rw")
 async def test_agent_handles_refund_request():
@@ -179,7 +179,7 @@ rewind stats [--days 30]                 # cost analytics
 ## Contributing
 
 ```bash
-git clone https://github.com/rewind-ai/rewind
+git clone https://github.com/llm-rewind/rewind
 cd rewind
 pip install -e ".[dev]"
 pytest                  # all tests use cassettes — no API key needed

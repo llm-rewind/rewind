@@ -1046,7 +1046,7 @@ Create:
    - Hero section: one-sentence value prop + the bisect demo (as ASCII or code block)
    - Problem section: "AI agents fail in production. You can't reproduce it." (3 sentences max)
    - Solution section: the 4-command demo showing record → replay → bisect
-   - Installation: `pip install rewind-ai`
+   - Installation: `pip install llm-rewind`
    - Quick start: 3 steps to first cassette
    - How it works: 2-paragraph architecture summary (link to docs/ARCHITECTURE.md)
    - Comparison table: Rewind vs LangSmith vs Braintrust vs Laminar (what we do they don't: true replay)
