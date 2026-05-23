@@ -49,8 +49,11 @@ Homepage = "https://github.com/rewind-ai/rewind"
 Repository = "https://github.com/rewind-ai/rewind"
 "Bug Tracker" = "https://github.com/rewind-ai/rewind/issues"
 
+[project.entry-points."pytest11"]
+rewind = "pytest_rewind.plugin"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/rewind"]
+packages = ["src/rewind", "pytest_rewind"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
