@@ -25,6 +25,14 @@ from rewind.constants import (
 )
 from rewind.storage.db import Session, Step
 
+# Windows console defaults to cp1252 which can't encode unicode glyphs (✓, ●, →).
+# Reconfigure stdio to UTF-8 before Rich initialises its renderer.
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 console = Console()
 
 
