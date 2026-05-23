@@ -241,7 +241,70 @@ async def _record_async(command: tuple[str, ...], name: str | None, port: int) -
 @click.option("--port", default=DEFAULT_PROXY_PORT, show_default=True, help="Proxy listen port")
 def replay(session_id: str, permissive: bool, override_command: str | None, port: int) -> None:
     """Replay a recorded session at zero LLM cost."""
-    console.print("[yellow]not implemented yet[/yellow]")
+    asyncio.run(_replay_async(session_id, permissive, override_command, port))
+
+
+async def _replay_async(
+    session_id: str, permissive: bool, override_command: str | None, port: int
+) -> None:
+    from rewind.exceptions import RewindSessionNotFoundError
+    from rewind.proxy.addon import run_replay_proxy
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB.get_or_create()
+    session = db.get_session(session_id)
+    if session is None:
+        raise RewindSessionNotFoundError(session_id)
+
+    blobs = BlobStore()
+    command_str = override_command or session.command or ""
+    if not command_str:
+        console.print(
+            "[red]No command stored for this session.[/red] "
+            "Use [cyan]--command[/cyan] to specify one."
+        )
+        raise SystemExit(1)
+
+    steps = db.get_steps(session.id)
+    mode_label = "[yellow]permissive[/yellow]" if permissive else "[green]strict[/green]"
+
+    stop = asyncio.Event()
+    proxy_task = asyncio.create_task(
+        run_replay_proxy(db, blobs, session.id, port=port, permissive=permissive, _stop=stop)
+    )
+    await asyncio.sleep(0.8)
+
+    console.print(f"[green]▶[/green] Replaying [cyan]{session.id[:8]}[/cyan] ({mode_label} mode)")
+    console.print(f"  Cassette: [dim]{len(steps)} step(s)[/dim]")
+    console.print(f"  Proxy:    [dim]http://127.0.0.1:{port}[/dim]")
+    console.print(f"  Command:  [dim]{command_str}[/dim]\n")
+
+    env = {
+        **os.environ,
+        "HTTPS_PROXY": f"http://127.0.0.1:{port}",
+        "HTTP_PROXY": f"http://127.0.0.1:{port}",
+        "SSL_CERT_FILE": str(CA_CERT_PATH),
+        "REQUESTS_CA_BUNDLE": str(CA_CERT_PATH),
+        "REWIND_MODE": "replay",
+    }
+
+    t0 = time.monotonic()
+    proc = subprocess.run(command_str.split(), env=env, check=False)
+    elapsed = time.monotonic() - t0
+
+    stop.set()
+    try:
+        await asyncio.wait_for(proxy_task, timeout=3.0)
+    except TimeoutError:
+        proxy_task.cancel()
+
+    icon = (
+        "[green]✓[/green]"
+        if proc.returncode == 0
+        else f"[red]✗ exit {proc.returncode}[/red]"
+    )
+    console.print(f"\n{icon} Replay complete — {elapsed:.1f}s (zero LLM cost)")
 
 
 @cli.command(name="list")

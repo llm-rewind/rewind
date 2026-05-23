@@ -11,6 +11,7 @@ from pathlib import Path
 
 from rewind.constants import DEFAULT_PROXY_PORT, PROXY_HOST, REWIND_DIR
 from rewind.proxy.record import RecordAddon
+from rewind.proxy.replay import ReplayAddon
 from rewind.storage.blobs import BlobStore
 from rewind.storage.db import RewindDB
 
@@ -37,6 +38,45 @@ async def run_record_proxy(
     )
     master = DumpMaster(opts, with_termlog=False, with_dumper=False)
     master.addons.add(RecordAddon(db, blobs, session_id))  # type: ignore[no-untyped-call]
+
+    if _stop is not None:
+        async def _waiter() -> None:
+            await _stop.wait()
+            master.shutdown()  # type: ignore[no-untyped-call]
+
+        asyncio.create_task(_waiter())
+
+    try:
+        await master.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        master.shutdown()  # type: ignore[no-untyped-call]
+
+
+async def run_replay_proxy(
+    db: RewindDB,
+    blobs: BlobStore,
+    session_id: str,
+    *,
+    host: str = PROXY_HOST,
+    port: int = DEFAULT_PROXY_PORT,
+    confdir: Path = REWIND_DIR,
+    permissive: bool = False,
+    _stop: asyncio.Event | None = None,
+) -> None:
+    """Run mitmproxy with ReplayAddon. Blocks until _stop is set or KeyboardInterrupt."""
+    from mitmproxy.options import Options
+    from mitmproxy.tools.dump import DumpMaster
+
+    opts = Options(
+        listen_host=host,
+        listen_port=port,
+        confdir=str(confdir),
+        ssl_insecure=False,
+    )
+    master = DumpMaster(opts, with_termlog=False, with_dumper=False)
+    master.addons.add(ReplayAddon(db, blobs, session_id, permissive=permissive))  # type: ignore[no-untyped-call]
 
     if _stop is not None:
         async def _waiter() -> None:
