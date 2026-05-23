@@ -30,10 +30,14 @@ def test_normalize_returns_sha256_hex() -> None:
 @pytest.mark.unit
 def test_normalize_strips_tool_call_id() -> None:
     """tool_call_id is volatile — same logical request should produce same key."""
-    make_body = lambda tid: json.dumps({  # noqa: E731
-        "model": "gpt-4o",
-        "messages": [{"role": "tool", "content": "result", "tool_call_id": tid}],
-    }).encode()
+    def make_body(tid: str) -> bytes:
+        return json.dumps(
+            {
+                "model": "gpt-4o",
+                "messages": [{"role": "tool", "content": "result", "tool_call_id": tid}],
+            }
+        ).encode()
+
     k1 = normalize_request("POST", "/v1/chat/completions", make_body("abc-111"))
     k2 = normalize_request("POST", "/v1/chat/completions", make_body("xyz-999"))
     assert k1 == k2
@@ -42,17 +46,25 @@ def test_normalize_strips_tool_call_id() -> None:
 @pytest.mark.unit
 def test_normalize_strips_tool_call_ids_in_tool_calls() -> None:
     """tool_calls[].id is volatile and must be stripped."""
-    make_body = lambda tid: json.dumps({  # noqa: E731
-        "model": "gpt-4o",
-        "messages": [
+    def make_body(tid: str) -> bytes:
+        return json.dumps(
             {
-                "role": "assistant",
-                "tool_calls": [
-                    {"id": tid, "type": "function", "function": {"name": "f", "arguments": "{}"}},
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": tid,
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            },
+                        ],
+                    }
                 ],
             }
-        ],
-    }).encode()
+        ).encode()
+
     k1 = normalize_request("POST", "/v1/chat/completions", make_body("call_111"))
     k2 = normalize_request("POST", "/v1/chat/completions", make_body("call_999"))
     assert k1 == k2
@@ -99,12 +111,15 @@ def test_normalize_non_json_body_uses_hex() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("messages,expected_equal", [
-    # Empty messages list
-    ([], True),
-    # Messages with no tool calls — tool_call_id absent, no change
-    ([{"role": "user", "content": "hi"}], True),
-])
+@pytest.mark.parametrize(
+    "messages,expected_equal",
+    [
+        # Empty messages list
+        ([], True),
+        # Messages with no tool calls — tool_call_id absent, no change
+        ([{"role": "user", "content": "hi"}], True),
+    ],
+)
 def test_normalize_edge_cases_stable(messages: list, expected_equal: bool) -> None:
     body = json.dumps({"messages": messages}).encode()
     k1 = normalize_request("POST", "/v1/chat/completions", body)

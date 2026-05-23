@@ -189,9 +189,7 @@ async def _record_async(command: tuple[str, ...], name: str | None, port: int) -
     db.save_session(session)
 
     stop = asyncio.Event()
-    proxy_task = asyncio.create_task(
-        run_record_proxy(db, blobs, session.id, port=port, _stop=stop)
-    )
+    proxy_task = asyncio.create_task(run_record_proxy(db, blobs, session.id, port=port, _stop=stop))
     await asyncio.sleep(0.8)  # wait for proxy to bind
 
     console.print(f"[green]●[/green] Recording [cyan]{session.id[:8]}[/cyan]")
@@ -222,11 +220,7 @@ async def _record_async(command: tuple[str, ...], name: str | None, port: int) -
     session.total_cost_usd = total_cost
     db.save_session(session)
 
-    icon = (
-        "[green]✓[/green]"
-        if proc.returncode == 0
-        else f"[red]✗ exit {proc.returncode}[/red]"
-    )
+    icon = "[green]✓[/green]" if proc.returncode == 0 else f"[red]✗ exit {proc.returncode}[/red]"
     console.print(
         f"\n{icon} Captured [cyan]{len(steps)}[/cyan] LLM call(s)"
         f" — ~${total_cost:.4f} | {elapsed:.1f}s"
@@ -299,11 +293,7 @@ async def _replay_async(
     except TimeoutError:
         proxy_task.cancel()
 
-    icon = (
-        "[green]✓[/green]"
-        if proc.returncode == 0
-        else f"[red]✗ exit {proc.returncode}[/red]"
-    )
+    icon = "[green]✓[/green]" if proc.returncode == 0 else f"[red]✗ exit {proc.returncode}[/red]"
     console.print(f"\n{icon} Replay complete — {elapsed:.1f}s (zero LLM cost)")
 
 
@@ -510,21 +500,145 @@ def bisect(session_id_a: str, session_id_b: str) -> None:
 @click.option("--output", default=None, help="Output path (default: <session_id[:8]>.rw)")
 def export_session(session_id: str, output: str | None) -> None:
     """Export a session as a portable cassette file (.rw)."""
-    console.print("[yellow]not implemented yet[/yellow]")
+    from rewind.engines.cassette import export_cassette, save_cassette_file
+    from rewind.exceptions import RewindSessionNotFoundError
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB()
+    blobs = BlobStore()
+    session = db.get_session(session_id)
+    if session is None:
+        raise RewindSessionNotFoundError(session_id)
+
+    cassette = export_cassette(db, blobs, session.id)
+    out_path = Path(output) if output else Path(f"{session.id[:8]}.rw")
+    save_cassette_file(cassette, out_path)
+
+    step_count = len(cassette["steps"])
+    blob_count = len(cassette["blobs"])
+    size_kb = out_path.stat().st_size // 1024
+    console.print(
+        f"[green]Exported[/green] {session.id[:8]}... → {out_path} "
+        f"({step_count} steps, {blob_count} blobs, ~{size_kb}KB)"
+    )
 
 
 @cli.command(name="import")
 @click.argument("path")
 def import_session(path: str) -> None:
     """Import a cassette file (.rw) into the local database."""
-    console.print("[yellow]not implemented yet[/yellow]")
+    from rewind.engines.cassette import import_cassette, load_cassette_file
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    rw_path = Path(path)
+    if not rw_path.exists():
+        console.print(f"[red]File not found:[/red] {rw_path}")
+        raise SystemExit(1)
+
+    db = RewindDB()
+    blobs = BlobStore()
+    data = load_cassette_file(rw_path)
+    session_id = import_cassette(data, db, blobs)
+
+    step_count = len(data.get("steps", []))
+    console.print(
+        f"[green]Imported[/green] session [bold]{session_id[:8]}...[/bold] "
+        f"({step_count} steps)"
+    )
 
 
 @cli.command()
 @click.option("--days", default=7, show_default=True, help="Number of days to include")
 def stats(days: int) -> None:
     """Show cost analytics for recent sessions."""
-    console.print("[yellow]not implemented yet[/yellow]")
+    from collections import defaultdict
+
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB()
+    since = datetime.now(UTC) - timedelta(days=days)
+    all_sessions = db.list_sessions(limit=10000)
+    recent = [s for s in all_sessions if s.started_at >= since]
+
+    if not recent:
+        console.print(f"[dim]No sessions in the last {days} days.[/dim]")
+        return
+
+    # Aggregate per-agent stats
+    agent_sessions: dict[str, int] = defaultdict(int)
+    agent_steps: dict[str, int] = defaultdict(int)
+    agent_input_tok: dict[str, int] = defaultdict(int)
+    agent_output_tok: dict[str, int] = defaultdict(int)
+    agent_cost: dict[str, float] = defaultdict(float)
+    agent_latency_sum: dict[str, int] = defaultdict(int)
+    model_counts: dict[str, int] = defaultdict(int)
+
+    total_steps = 0
+    total_input = 0
+    total_output = 0
+    total_cost = 0.0
+
+    for session in recent:
+        name = session.agent_name
+        agent_sessions[name] += 1
+        steps = db.get_steps(session.id)
+        for step in steps:
+            total_steps += 1
+            agent_steps[name] += 1
+            agent_input_tok[name] += step.input_tok
+            agent_output_tok[name] += step.output_tok
+            agent_latency_sum[name] += step.latency_ms
+            total_input += step.input_tok
+            total_output += step.output_tok
+            if step.model:
+                model_counts[step.model] += 1
+            in_cost, out_cost = MODEL_COSTS.get(step.model or "", (0.0, 0.0))
+            step_cost = step.input_tok / 1000 * in_cost + step.output_tok / 1000 * out_cost
+            agent_cost[name] += step_cost
+            total_cost += step_cost
+
+    most_expensive = max(agent_cost, key=lambda k: agent_cost[k]) if agent_cost else "—"
+    most_common_model = max(model_counts, key=lambda k: model_counts[k]) if model_counts else "—"
+
+    summary_lines = [
+        f"[bold]Sessions:[/bold] {len(recent)} (last {days} days)",
+        f"[bold]LLM steps:[/bold] {total_steps}",
+        f"[bold]Tokens:[/bold] {total_input:,} input / {total_output:,} output",
+        f"[bold]Estimated cost:[/bold] ${total_cost:.4f}",
+        f"[bold]Most expensive agent:[/bold] {most_expensive} "
+        f"(${agent_cost.get(most_expensive, 0.0):.4f})",
+        f"[bold]Most common model:[/bold] {most_common_model}",
+    ]
+    console.print(Panel("\n".join(summary_lines), title="Summary", border_style="blue"))
+
+    table = Table(title="Per-Agent Breakdown (estimated costs)", border_style="dim")
+    table.add_column("Agent", style="bold")
+    table.add_column("Sessions", justify="right")
+    table.add_column("Steps", justify="right")
+    table.add_column("Input tok", justify="right")
+    table.add_column("Output tok", justify="right")
+    table.add_column("Est. cost", justify="right")
+    table.add_column("Avg latency", justify="right")
+
+    for name in sorted(agent_sessions):
+        s_count = agent_steps[name]
+        avg_lat = f"{agent_latency_sum[name] // s_count}ms" if s_count else "—"
+        table.add_row(
+            name,
+            str(agent_sessions[name]),
+            str(s_count),
+            f"{agent_input_tok[name]:,}",
+            f"{agent_output_tok[name]:,}",
+            f"${agent_cost[name]:.4f}",
+            avg_lat,
+        )
+
+    console.print(table)
 
 
 if __name__ == "__main__":
