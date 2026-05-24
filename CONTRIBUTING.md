@@ -20,7 +20,7 @@ pip install -e ".[dev]"
 Every change goes through these four commands. All four must pass.
 
 ```bash
-pytest                                          # 100+ tests, no API key required
+pytest                                          # 140+ tests, no API key required
 ruff check src/ tests/ pytest_rewind/
 ruff format src/ tests/ pytest_rewind/ --check
 mypy src/ pytest_rewind/ --strict

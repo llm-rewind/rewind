@@ -21,12 +21,16 @@ URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generate
 
 
 def run() -> str:
-    if not API_KEY:
+    # In replay mode the proxy serves recorded bytes; the agent does not
+    # need a real key. We send a placeholder so the URL still matches the
+    # path the recording used (the proxy strips ?key= before match_key).
+    api_key = API_KEY or "replay-placeholder"
+    if not API_KEY and os.environ.get("REWIND_MODE") != "replay":
         raise SystemExit("Set GEMINI_API_KEY in the environment before recording.")
 
     response = httpx.post(
         URL,
-        params={"key": API_KEY},
+        params={"key": api_key},
         json={
             "contents": [{"parts": [{"text": "Say exactly: hello from rewind gemini test"}]}],
             "generationConfig": {"temperature": 0.0, "maxOutputTokens": 64},

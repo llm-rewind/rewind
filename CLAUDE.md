@@ -67,7 +67,7 @@ High-risk changes require: impact analysis, failure-mode documentation, rollback
 
 ## Non-Negotiable Guardrails
 
-- `REWIND_MODE=replay` **must never** call real LLM APIs. Cassette miss → `CassetteMissError`, never silent passthrough.
+- `REWIND_MODE=replay` **must never** call real LLM APIs. In the proxy path, a cassette miss writes `flow.response` = HTTP 599 with an `X-Rewind-Cassette-Miss` header so mitmproxy short-circuits the upstream dial. In the SDK decorator path, it raises `CassetteMissError`. Neither path may silently passthrough.
 - CA private key **never** logged, stored in cassettes, or committed to git.
 - Blob SHA-256 verified on every read. Hash mismatch → hard fail (`BlobTamperedError`), not warning.
 - Auth headers (`Authorization`, `x-api-key`, `x-stainless-*`) **never** stored in cassettes.

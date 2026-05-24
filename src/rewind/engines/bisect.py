@@ -150,11 +150,15 @@ def _infer_cause(
         )
 
     if step_a.model != step_b.model:
-        return (
-            DivergenceCause.MODEL_VERSION,
-            f"model changed: {step_a.model!r} -> {step_b.model!r}. "
-            "Model upgrades are the highest-likelihood cause of behaviour shifts.",
-        )
+        # Skip the model-change branch when both sides are None; that almost
+        # always means the provider didn't echo a model field on the response
+        # blob, not that someone changed the model from None to None.
+        if step_a.model is not None or step_b.model is not None:
+            return (
+                DivergenceCause.MODEL_VERSION,
+                f"model changed: {step_a.model!r} -> {step_b.model!r}. "
+                "Model upgrades are the highest-likelihood cause of behaviour shifts.",
+            )
 
     # Load the request blobs to compare prompt and tool list.
     req_a = _load_blob(blobs, step_a.req_blob)

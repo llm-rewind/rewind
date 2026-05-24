@@ -14,6 +14,7 @@ import pytest
 
 from rewind.engines.mutate import (
     MutationKind,
+    delete_mutated_sessions,
     generate_mutations,
 )
 from rewind.storage.blobs import BlobStore
@@ -168,3 +169,31 @@ def test_generate_mutations_empty_session(tmp_path: Path) -> None:
     session = Session(agent_name="empty")
     db.save_session(session)
     assert list(generate_mutations(db, session.id)) == []
+
+
+@pytest.mark.unit
+def test_delete_mutated_sessions_removes_all_derivatives(tmp_path: Path) -> None:
+    db, blobs, sid = _populate(tmp_path)
+    mutations = list(generate_mutations(db, sid))
+    derived_ids: list[str] = []
+    for m in mutations[:3]:
+        derived_ids.append(m.apply(db, blobs, sid))
+
+    # Base session and all 3 derivatives exist.
+    assert db.get_session(sid) is not None
+    for d in derived_ids:
+        assert db.get_session(d) is not None
+
+    removed = delete_mutated_sessions(db, sid)
+    assert removed == 3
+
+    # Base session still here, derivatives gone.
+    assert db.get_session(sid) is not None
+    for d in derived_ids:
+        assert db.get_session(d) is None
+
+
+@pytest.mark.unit
+def test_delete_mutated_sessions_returns_zero_when_no_derivatives(tmp_path: Path) -> None:
+    db, _, sid = _populate(tmp_path)
+    assert delete_mutated_sessions(db, sid) == 0

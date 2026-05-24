@@ -11,8 +11,8 @@
 $ rewind bisect run-good-7f3a run-bad-9b2c
 
 First divergence at step 4
-  Session A: run-good-7f3a  model=gpt-4o-2025-11
-  Session B: run-bad-9b2c   model=gpt-4o-2026-05
+  Session A: run-good  model='gpt-4o-2025-11'
+  Session B: run-bad   model='gpt-4o-2026-05'
   Cause:    model_version_changed
   Detail:   model changed: 'gpt-4o-2025-11' -> 'gpt-4o-2026-05'.
             Model upgrades are the highest-likelihood cause
@@ -87,7 +87,7 @@ rewind replay 7f3a2b
 ```bash
 rewind bisect run-good-7f3a run-bad-9b2c
 # First divergence at step 4
-#   Cause: tool_output_drift
+#   Cause:  upstream_tool_output_drifted
 #   Detail: previous step (3, tool_call) returned different output.
 #           Likely root cause is upstream; bisect that step first.
 ```
@@ -98,15 +98,20 @@ rewind bisect run-good-7f3a run-bad-9b2c
 rewind mutate 7f3a2b9c
 
 # Mutation Report
-# +-------------------+------+---------+----------------------------+
-# | Mutation          | Step | Outcome | Detail                     |
-# +===================+======+=========+============================+
-# | empty_response    | 0    | SURVIVED| ...                        |
-# | provider_500      | 0    | CRASHED | unhandled HTTPStatusError  |
-# | error_response    | 4    | CHANGED | agent ignored 429 retry    |
-# | truncate_response | 7    | CRASHED | JSONDecodeError            |
-# +-------------------+------+---------+----------------------------+
+# +-------------------+------+----------------+----------------------------+
+# | Mutation          | Step | Outcome        | Detail                     |
+# +===================+======+================+============================+
+# | empty_response    | 0    | SURVIVED       | step 0 response empty      |
+# | provider_500      | 0    | CRASHED        | step 0 returns 500 error   |
+# | error_response    | 4    | OUTPUT CHANGED | step 4 returns 429         |
+# | truncate_response | 7    | CRASHED        | step 7 truncated to half   |
+# +-------------------+------+----------------+----------------------------+
 # Survived: 9 | Changed: 3 | Crashed: 3 | Total: 15
+#
+# Caveat: the survival oracle is stdout equality. An agent that
+# prints the same thing while doing the wrong thing internally is
+# marked SURVIVED. Augment your agent's stdout if you need a finer
+# oracle.
 ```
 
 The Crashed row is what you fix before deploying.

@@ -47,13 +47,17 @@ async def run_record_proxy(
         RecordAddon(db, blobs, session_id, provider_hosts=provider_hosts)
     )
 
+    # Hold a reference to the waiter task; bare asyncio.create_task can be
+    # garbage-collected if no strong reference is kept, which would silently
+    # break programmatic shutdown.
+    waiter_task: asyncio.Task[None] | None = None
     if _stop is not None:
 
         async def _waiter() -> None:
             await _stop.wait()
             master.shutdown()  # type: ignore[no-untyped-call]
 
-        asyncio.create_task(_waiter())
+        waiter_task = asyncio.create_task(_waiter())
 
     try:
         await master.run()
@@ -61,6 +65,8 @@ async def run_record_proxy(
         pass
     finally:
         master.shutdown()  # type: ignore[no-untyped-call]
+        if waiter_task is not None and not waiter_task.done():
+            waiter_task.cancel()
 
 
 async def run_replay_proxy(
@@ -96,13 +102,15 @@ async def run_replay_proxy(
         ReplayAddon(db, blobs, session_id, permissive=permissive, provider_hosts=provider_hosts)
     )
 
+    # See run_record_proxy for why the task reference must be held.
+    waiter_task: asyncio.Task[None] | None = None
     if _stop is not None:
 
         async def _waiter() -> None:
             await _stop.wait()
             master.shutdown()  # type: ignore[no-untyped-call]
 
-        asyncio.create_task(_waiter())
+        waiter_task = asyncio.create_task(_waiter())
 
     try:
         await master.run()
@@ -110,3 +118,5 @@ async def run_replay_proxy(
         pass
     finally:
         master.shutdown()  # type: ignore[no-untyped-call]
+        if waiter_task is not None and not waiter_task.done():
+            waiter_task.cancel()

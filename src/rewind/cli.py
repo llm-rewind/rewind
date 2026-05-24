@@ -182,11 +182,37 @@ def _generate_ca(rewind_dir: Path) -> None:
     # mitmproxy expects key+cert concatenated in mitmproxy-ca.pem
     mitm_pem = rewind_dir / "mitmproxy-ca.pem"
     mitm_pem.write_bytes(key_pem + cert_pem)
-    mitm_pem.chmod(0o600)
+    _restrict_to_owner(mitm_pem)
 
     CA_CERT_PATH.write_bytes(cert_pem)
     CA_KEY_PATH.write_bytes(key_pem)
-    CA_KEY_PATH.chmod(0o600)
+    _restrict_to_owner(CA_KEY_PATH)
+
+
+def _restrict_to_owner(path: Path) -> None:
+    """Restrict file permissions to the current user.
+
+    On POSIX, chmod 600. On Windows, replace the file's DACL with one
+    that grants Full Control to the current user only. Plain chmod is a
+    silent no-op on Windows and would leave the CA private key
+    world-readable. We use icacls because cryptography for setting NTFS
+    ACLs from Python is more dependency than this single call deserves.
+    """
+    if os.name == "nt":
+        try:
+            user = os.environ.get("USERNAME") or os.environ.get("USER") or "%USERNAME%"
+            subprocess.run(
+                ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # icacls failure does not abort init; the file is at least in the
+            # user's profile directory and a warning is the right level here.
+            pass
+    else:
+        path.chmod(0o600)
 
 
 @click.group()
@@ -612,11 +638,18 @@ def bisect(session_id_a: str, session_id_b: str) -> None:
     show_default=True,
     help="Per-mutation subprocess timeout in seconds",
 )
+@click.option(
+    "--keep-sessions",
+    is_flag=True,
+    default=False,
+    help="Keep mutated sessions in the local DB after the run (default: delete them)",
+)
 def mutate(
     session_id: str,
     override_command: str | None,
     port: int,
     timeout: int,
+    keep_sessions: bool,
 ) -> None:
     """Mutation-test an agent against a recorded session.
 
@@ -625,8 +658,13 @@ def mutate(
     against each mutation. Reports which mutations the agent survives
     and which expose fragility. The novel piece: tells you where your
     agent will silently misbehave when production drifts.
+
+    Caveats: the survival oracle is stdout equality, so an agent that
+    prints the same thing while doing the wrong thing under the hood
+    is reported as SURVIVED. Capture the agent's actual side effects
+    (writes, API calls, return values) if you need a stronger oracle.
     """
-    asyncio.run(_mutate_async(session_id, override_command, port, timeout))
+    asyncio.run(_mutate_async(session_id, override_command, port, timeout, keep_sessions))
 
 
 async def _mutate_async(
@@ -634,8 +672,13 @@ async def _mutate_async(
     override_command: str | None,
     port: int,
     timeout: int,
+    keep_sessions: bool,
 ) -> None:
-    from rewind.engines.mutate import MutationResult, generate_mutations
+    from rewind.engines.mutate import (
+        MutationResult,
+        delete_mutated_sessions,
+        generate_mutations,
+    )
     from rewind.exceptions import RewindSessionNotFoundError
     from rewind.storage.blobs import BlobStore
     from rewind.storage.db import RewindDB
@@ -658,7 +701,7 @@ async def _mutate_async(
     # what "correct" output looks like.
     console.print("[dim]Running baseline replay...[/dim]")
     baseline_code, baseline_out = await _run_replay(
-        db, blobs, session.id, command_str, port=port, timeout=timeout
+        db, blobs, session.id, command_str, port=_alloc_port(port), timeout=timeout
     )
     if baseline_code != 0:
         console.print(
@@ -674,21 +717,51 @@ async def _mutate_async(
     console.print(f"Running {len(mutations)} mutations...\n")
 
     results: list[MutationResult] = []
-    for m in mutations:
-        new_id = m.apply(db, blobs, session.id)
-        rc, out = await _run_replay(db, blobs, new_id, command_str, port=port, timeout=timeout)
-        results.append(
-            MutationResult(
-                mutation=m,
-                mutated_session_id=new_id,
-                exit_code=rc,
-                stdout=out,
-                crashed=(rc is None or rc != 0),
-                output_changed=(out != baseline_out),
+    try:
+        for m in mutations:
+            new_id = m.apply(db, blobs, session.id)
+            # Allocate a fresh port per mutation. Reusing the same port
+            # races against TIME_WAIT on the previous proxy's socket and
+            # produces "Address already in use" mid-run.
+            rc, out = await _run_replay(
+                db, blobs, new_id, command_str, port=_alloc_port(port), timeout=timeout
             )
-        )
+            results.append(
+                MutationResult(
+                    mutation=m,
+                    mutated_session_id=new_id,
+                    exit_code=rc,
+                    stdout=out,
+                    crashed=(rc is None or rc != 0),
+                    output_changed=(out != baseline_out),
+                )
+            )
 
-    _print_mutation_report(results)
+        _print_mutation_report(results)
+    finally:
+        # Always runs, including on KeyboardInterrupt mid-loop, so the DB
+        # does not accumulate orphaned mutated sessions on abort.
+        if not keep_sessions:
+            removed = delete_mutated_sessions(db, session.id)
+            if removed:
+                console.print(
+                    f"\n[dim]Cleaned up {removed} mutated session(s) "
+                    f"(pass --keep-sessions to retain).[/dim]"
+                )
+
+
+def _alloc_port(fallback: int) -> int:
+    """Return an unused TCP port, or `fallback` if probing fails."""
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+        s.close()
+        return port
+    except OSError:
+        return fallback
 
 
 async def _run_replay(

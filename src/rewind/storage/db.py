@@ -230,5 +230,16 @@ class RewindDB:
             is_streaming=bool(row[14]),
         )
 
+    def delete_session(self, session_id: str) -> None:
+        """Hard-delete a session and all its steps.
+
+        Used by `rewind mutate` to clean up the per-mutation sessions it
+        materialises so they do not pollute `rewind list` forever.
+        Foreign keys are not enforced by DuckDB by default; we explicitly
+        delete steps first to keep the schema honest if FKs are turned on.
+        """
+        self._conn.execute("DELETE FROM steps WHERE session_id = ?", [session_id])
+        self._conn.execute("DELETE FROM sessions WHERE id = ?", [session_id])
+
     def close(self) -> None:
         self._conn.close()

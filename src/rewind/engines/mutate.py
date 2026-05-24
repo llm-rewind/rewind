@@ -26,13 +26,17 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
+from rewind.exceptions import BlobTamperedError
 from rewind.storage.blobs import BlobStore
 from rewind.storage.db import RewindDB, Session, Step
+
+_LOG = logging.getLogger(__name__)
 
 
 class MutationKind(StrEnum):
@@ -272,10 +276,36 @@ def _rewrite_resp(
             continue
         try:
             original = json.loads(blobs.read(step.resp_blob))
-        except Exception:
+        except (BlobTamperedError, json.JSONDecodeError, ValueError) as e:
+            # A blob we cannot read is itself a finding worth surfacing; the
+            # caller sees the unmutated step and a logged warning rather
+            # than a silent skip that would hide corruption.
+            _LOG.warning(
+                "mutate: skipping step %d, could not read resp blob (%s): %s",
+                step.order_idx,
+                type(e).__name__,
+                e,
+            )
             out.append(step)
             continue
         new_payload = rewrite_fn(original)  # type: ignore[operator]
         new_blob = blobs.write(json.dumps(new_payload, sort_keys=True).encode())
         out.append(step.model_copy(update={"resp_blob": new_blob}))
     return out
+
+
+def delete_mutated_sessions(db: RewindDB, base_session_id: str) -> int:
+    """Delete every mutated session derived from base_session_id.
+
+    `rewind mutate` materialises each mutation as its own session so the
+    runs are independently inspectable. Without cleanup they accumulate
+    forever in `rewind list`. Call this after a mutation run when the
+    individual sessions are no longer interesting.
+    Returns the count of sessions removed.
+    """
+    removed = 0
+    for sess in db.list_sessions(limit=10_000):
+        if sess.metadata.get("base_session_id") == base_session_id:
+            db.delete_session(sess.id)
+            removed += 1
+    return removed
