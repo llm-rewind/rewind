@@ -11,7 +11,48 @@ All notable changes to this project are documented here. Format follows
 - gRPC interception support (Gemini SDK defaults to gRPC, currently bypasses proxy)
 - Cross-platform CI matrix (currently Ubuntu only; tests run locally on Windows)
 
-## [0.2.0] - 2026-05-24
+## [0.2.1] - 2026-05-24
+
+### Security
+
+- **v0.2.0 sdist contained a PyPI upload token in `.claude/settings.local.json`**
+  (a tooling artifact that was tracked in git but should have been ignored).
+  The token was detected by Deps.dev within hours of publication and
+  automatically revoked by PyPI; no malicious release was made. v0.2.0
+  has been yanked. **Upgrade to 0.2.1.**
+- `.claude/settings.local.json` is now in `.gitignore` and removed from
+  the tree, so no editor or build-tool secrets can ride along in future
+  releases.
+- Followups for users who installed 0.2.0: no action required for runtime
+  use; the token did not authenticate to any production system other
+  than the publisher's own PyPI account.
+
+### Fixed
+
+- Audit gaps from the second-pass review of v0.2.0 land here as
+  bundled fixes:
+  - `asyncio.create_task(_waiter())` in proxy/addon.py held no
+    reference and could be garbage-collected, silently breaking
+    programmatic shutdown. Reference is now retained and cancelled
+    in the finally block.
+  - CA private key (`~/.rewind/ca.key`) was world-readable on Windows
+    because `Path.chmod(0o600)` is a silent no-op on NTFS. `rewind
+    init` now invokes `icacls` on win32 to set an owner-only DACL.
+  - `rewind mutate` did not clean up mutated sessions on abort, and
+    sequential mutations raced against TIME_WAIT on the same proxy
+    port. Cleanup is in a finally block; each mutation gets a fresh
+    free port.
+  - `bisect` cause inference reported `model changed: None -> None`
+    when neither side had a model field. Guarded.
+  - `gemini_agent.py` raised `SystemExit` on missing key even in
+    replay mode where no real key is needed. Replay now uses a
+    placeholder.
+- Docs: CLAUDE.md guardrail 1 describes both the proxy 599 path and
+  the SDK decorator raise. CONTRIBUTING test count updated.
+
+## [0.2.0] - 2026-05-24 [YANKED]
+
+Yanked due to credential leak; see 0.2.1 security note.
 
 The release that makes the previous one honest. v0.1.0 shipped without
 end-to-end proof that the record-replay loop worked end-to-end against
@@ -136,6 +177,7 @@ and (with REST transport) Google Gemini.
   live API. Permissive passthrough requires an explicit `--permissive` flag
 - CA private key never appears in logs, error messages, or exports
 
-[Unreleased]: https://github.com/llm-rewind/rewind/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/llm-rewind/rewind/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/llm-rewind/rewind/releases/tag/v0.2.1
 [0.2.0]: https://github.com/llm-rewind/rewind/releases/tag/v0.2.0
 [0.1.0]: https://github.com/llm-rewind/rewind/releases/tag/v0.1.0
