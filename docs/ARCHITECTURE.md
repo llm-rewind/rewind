@@ -203,14 +203,24 @@ src/rewind/
 │   ├── db.py              # DuckDB schema + queries
 │   └── blobs.py           # content-addressed filesystem
 ├── engines/
-│   ├── replay.py          # orchestrates replay run
 │   ├── diff.py            # step-by-step session diff
-│   └── bisect.py          # divergence finder
+│   ├── bisect.py          # divergence finder + cause inference
+│   ├── mutate.py          # cassette mutation testing (rewind mutate)
+│   └── cassette.py        # .rw export/import + auth-header safety check
 ├── sdk/
-│   ├── decorator.py       # @rewind.session, @rewind.tool
-│   └── patches.py         # openai/anthropic SDK patches
+│   └── decorator.py       # @rewind.session, @rewind.tool
 └── ui/
     └── display.py         # rich tables + diffs
+
+(Replay orchestration lives in cli.py:replay(), which composes
+run_replay_proxy from proxy/addon.py with a subprocess re-run. The earlier
+engines/replay.py was a stub from the original phase plan and was dropped
+when the CLI became the single entry point.
+
+SDK transport-level patching was originally planned for sdk/patches.py to
+hook openai/anthropic SDKs directly, but the proxy approach turned out to
+cover both providers without per-SDK patching. The decorator path uses
+contextvars for tool tracking instead.)
 
 tests/
 ├── unit/                  # pure logic, no I/O

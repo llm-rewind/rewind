@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from rewind.exceptions import BlobTamperedError, CassetteMissError
+from rewind.exceptions import BlobTamperedError
 from rewind.proxy.normalize import normalize_request
 from rewind.proxy.replay import ReplayAddon
 from rewind.storage.blobs import BlobStore
@@ -93,7 +93,10 @@ def test_replay_serves_stored_response(tmp_path: pytest.TempdirFactory) -> None:
 
 
 @pytest.mark.unit
-def test_replay_strict_miss_raises(tmp_path: pytest.TempdirFactory) -> None:
+def test_replay_strict_miss_returns_599(tmp_path: pytest.TempdirFactory) -> None:
+    """Strict-mode cassette miss must NOT raise (mitmproxy swallows addon
+    exceptions and falls through to real upstream). Instead, populate
+    flow.response with a 599 + JSON error body to short-circuit upstream."""
     db = RewindDB(":memory:")
     blobs = BlobStore(tmp_path)
     session = Session(agent_name="empty")
@@ -102,10 +105,14 @@ def test_replay_strict_miss_raises(tmp_path: pytest.TempdirFactory) -> None:
     addon = ReplayAddon(db, blobs, session.id, permissive=False)
     flow = _make_flow(body=b'{"model":"gpt-4o"}')
 
-    with pytest.raises(CassetteMissError) as exc_info:
-        addon.request(flow)
+    addon.request(flow)
 
-    assert "api.openai.com" in exc_info.value.args[0] or exc_info.value.match_key
+    assert flow.response is not None
+    assert flow.response.status_code == 599
+    assert flow.response.headers.get("X-Rewind-Cassette-Miss")
+    body = json.loads(flow.response.content or b"{}")
+    assert body["error"] == "cassette_miss"
+    assert body["session_id"] == session.id
 
 
 @pytest.mark.unit
@@ -175,10 +182,11 @@ def test_replay_multiple_calls_served_in_order(tmp_path: pytest.TempdirFactory) 
     addon.request(flow2)
     assert flow2.response is not None
 
-    # Third call — queue exhausted → miss
+    # Third call — queue exhausted → miss, returns 599 short-circuit response
     flow3 = _make_flow(body=req_body)
-    with pytest.raises(CassetteMissError):
-        addon.request(flow3)
+    addon.request(flow3)
+    assert flow3.response is not None
+    assert flow3.response.status_code == 599
 
 
 @pytest.mark.unit
@@ -252,5 +260,7 @@ def test_replay_steps_without_resp_blob_skipped(tmp_path: pytest.TempdirFactory)
     addon = ReplayAddon(db, blobs, session.id)
     flow = _make_flow(body=req_body)
 
-    with pytest.raises(CassetteMissError):
-        addon.request(flow)
+    # Step has no resp_blob → excluded from cassette → counts as miss
+    addon.request(flow)
+    assert flow.response is not None
+    assert flow.response.status_code == 599

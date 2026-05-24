@@ -1,0 +1,281 @@
+"""Mutation testing for AI agents.
+
+The novel piece. VCR-style cassettes prove an agent reproduces a single
+recorded path. Mutation testing systematically perturbs the recording
+and re-runs the agent against each perturbation to surface where the
+agent quietly does the wrong thing when the world is slightly off.
+
+This is Stryker for LLM agents. The mutations target the failure modes
+that actually bite production AI systems:
+
+- the model returns an empty completion (max_tokens hit, refusal)
+- a tool returns malformed or empty output
+- the provider returns a 429 or 500 mid-run
+- the response gets truncated halfway through
+- a step is missing entirely (silently dropped LLM call)
+
+Each mutation runs as its own replay session. If the agent's
+observable output is unchanged, the agent is robust to that fault. If
+it changes or the process crashes, mutate reports it as a fragility.
+
+The CLI surface is `rewind mutate`. The engine here is pure: it takes
+a cassette and yields mutated copies. The CLI handles orchestration.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
+from enum import StrEnum
+
+from rewind.storage.blobs import BlobStore
+from rewind.storage.db import RewindDB, Session, Step
+
+
+class MutationKind(StrEnum):
+    DROP_STEP = "drop_step"
+    EMPTY_RESPONSE = "empty_response"
+    TRUNCATE_RESPONSE = "truncate_response"
+    ERROR_RESPONSE = "error_response"
+    PROVIDER_500 = "provider_500"
+
+
+@dataclass
+class Mutation:
+    """One mutation. `apply` materialises the new cassette by writing
+    fresh DB rows and blob entries, returning the new session id."""
+
+    kind: MutationKind
+    target_order_idx: int  # which step is mutated
+    description: str
+    _materialiser: object  # callable: (db, blobs, base_session_id) -> str
+
+    def apply(self, db: RewindDB, blobs: BlobStore, base_session_id: str) -> str:
+        return self._materialiser(db, blobs, base_session_id)  # type: ignore[operator,no-any-return]
+
+
+@dataclass
+class MutationResult:
+    mutation: Mutation
+    mutated_session_id: str
+    # The CLI fills these in after running the agent against the mutated cassette.
+    exit_code: int | None = None
+    stdout: str | None = None
+    crashed: bool = False
+    output_changed: bool = False
+
+
+def generate_mutations(db: RewindDB, session_id: str) -> Iterator[Mutation]:
+    """Walk the recorded session and yield every mutation worth running."""
+    steps = db.get_steps(session_id)
+    if not steps:
+        return
+
+    for step in steps:
+        if step.resp_blob is None:
+            continue
+
+        idx = step.order_idx
+        yield _drop_step_mutation(idx)
+        yield _empty_response_mutation(idx)
+        yield _truncate_response_mutation(idx)
+        yield _error_response_mutation(idx)
+        yield _provider_500_mutation(idx)
+
+
+# ---------------------------------------------------------------------------
+# Mutation factories
+# ---------------------------------------------------------------------------
+
+
+def _drop_step_mutation(idx: int) -> Mutation:
+    def apply(db: RewindDB, blobs: BlobStore, base_id: str) -> str:
+        return _materialise(
+            db,
+            blobs,
+            base_id,
+            mutate_fn=lambda steps: [s for s in steps if s.order_idx != idx],
+            suffix=f"drop-{idx}",
+        )
+
+    return Mutation(
+        kind=MutationKind.DROP_STEP,
+        target_order_idx=idx,
+        description=f"step {idx} removed entirely (simulates dropped LLM call)",
+        _materialiser=apply,
+    )
+
+
+def _empty_response_mutation(idx: int) -> Mutation:
+    def apply(db: RewindDB, blobs: BlobStore, base_id: str) -> str:
+        return _materialise(
+            db,
+            blobs,
+            base_id,
+            mutate_fn=lambda steps: _rewrite_resp(blobs, steps, idx, _empty_payload),
+            suffix=f"empty-{idx}",
+        )
+
+    return Mutation(
+        kind=MutationKind.EMPTY_RESPONSE,
+        target_order_idx=idx,
+        description=f"step {idx} response replaced with empty body (refusal/max_tokens)",
+        _materialiser=apply,
+    )
+
+
+def _truncate_response_mutation(idx: int) -> Mutation:
+    def apply(db: RewindDB, blobs: BlobStore, base_id: str) -> str:
+        return _materialise(
+            db,
+            blobs,
+            base_id,
+            mutate_fn=lambda steps: _rewrite_resp(blobs, steps, idx, _truncate_payload),
+            suffix=f"trunc-{idx}",
+        )
+
+    return Mutation(
+        kind=MutationKind.TRUNCATE_RESPONSE,
+        target_order_idx=idx,
+        description=f"step {idx} response truncated to first half (max_tokens cutoff)",
+        _materialiser=apply,
+    )
+
+
+def _error_response_mutation(idx: int) -> Mutation:
+    def apply(db: RewindDB, blobs: BlobStore, base_id: str) -> str:
+        return _materialise(
+            db,
+            blobs,
+            base_id,
+            mutate_fn=lambda steps: _rewrite_resp(blobs, steps, idx, _rate_limit_payload),
+            suffix=f"429-{idx}",
+        )
+
+    return Mutation(
+        kind=MutationKind.ERROR_RESPONSE,
+        target_order_idx=idx,
+        description=f"step {idx} returns 429 rate-limit error",
+        _materialiser=apply,
+    )
+
+
+def _provider_500_mutation(idx: int) -> Mutation:
+    def apply(db: RewindDB, blobs: BlobStore, base_id: str) -> str:
+        return _materialise(
+            db,
+            blobs,
+            base_id,
+            mutate_fn=lambda steps: _rewrite_resp(blobs, steps, idx, _server_error_payload),
+            suffix=f"500-{idx}",
+        )
+
+    return Mutation(
+        kind=MutationKind.PROVIDER_500,
+        target_order_idx=idx,
+        description=f"step {idx} returns 500 server error",
+        _materialiser=apply,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Payload rewrites
+# ---------------------------------------------------------------------------
+
+
+def _empty_payload(original: dict[str, object]) -> dict[str, object]:
+    payload = copy.deepcopy(original)
+    payload["body"] = json.dumps({"content": [], "choices": []})
+    return payload
+
+
+def _truncate_payload(original: dict[str, object]) -> dict[str, object]:
+    payload = copy.deepcopy(original)
+    body = payload.get("body", "")
+    if isinstance(body, str) and len(body) > 4:
+        payload["body"] = body[: max(1, len(body) // 2)]
+    return payload
+
+
+def _rate_limit_payload(original: dict[str, object]) -> dict[str, object]:
+    return {
+        "status_code": 429,
+        "headers": {"content-type": "application/json", "retry-after": "5"},
+        "body": json.dumps(
+            {"error": {"code": 429, "message": "Rate limit exceeded (mutated by rewind mutate)"}}
+        ),
+    }
+
+
+def _server_error_payload(original: dict[str, object]) -> dict[str, object]:
+    return {
+        "status_code": 500,
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps({"error": {"code": 500, "message": "Internal server error (mutated)"}}),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Materialisation: clone session, apply mutate_fn, write to DB
+# ---------------------------------------------------------------------------
+
+
+def _materialise(
+    db: RewindDB,
+    blobs: BlobStore,
+    base_session_id: str,
+    *,
+    mutate_fn: object,
+    suffix: str,
+) -> str:
+    """Copy a base session to a new session id, applying mutate_fn to the
+    step list before saving. Returns the new session id."""
+    base = db.get_session(base_session_id)
+    if base is None:
+        raise ValueError(f"session not found: {base_session_id}")
+    original_steps = db.get_steps(base_session_id)
+
+    new_id = str(uuid.uuid4())
+    new_session = Session(
+        id=new_id,
+        agent_name=f"{base.agent_name}:mutated:{suffix}",
+        git_hash=base.git_hash,
+        command=base.command,
+        metadata={**base.metadata, "rewind_mutation": suffix, "base_session_id": base_session_id},
+    )
+    db.save_session(new_session)
+
+    mutated = mutate_fn(original_steps)  # type: ignore[operator]
+    for step in mutated:
+        # New step id, new session id, but everything else (including blob hashes) preserved.
+        cloned = step.model_copy(update={"id": str(uuid.uuid4()), "session_id": new_id})
+        db.save_step(cloned)
+
+    return new_id
+
+
+def _rewrite_resp(
+    blobs: BlobStore,
+    steps: list[Step],
+    target_idx: int,
+    rewrite_fn: object,
+) -> list[Step]:
+    """Return a new step list where the target step's resp_blob is replaced
+    by a freshly written blob holding the rewritten payload."""
+    out: list[Step] = []
+    for step in steps:
+        if step.order_idx != target_idx or step.resp_blob is None:
+            out.append(step)
+            continue
+        try:
+            original = json.loads(blobs.read(step.resp_blob))
+        except Exception:
+            out.append(step)
+            continue
+        new_payload = rewrite_fn(original)  # type: ignore[operator]
+        new_blob = blobs.write(json.dumps(new_payload, sort_keys=True).encode())
+        out.append(step.model_copy(update={"resp_blob": new_blob}))
+    return out

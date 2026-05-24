@@ -31,6 +31,8 @@ STRIP_HEADERS: frozenset[str] = frozenset(
     {
         "authorization",
         "x-api-key",
+        "x-goog-api-key",  # Google Generative AI / Vertex AI auth header
+        "x-goog-user-project",  # Google project identifier (PII)
         "x-request-id",
         "idempotency-key",
         "cf-ray",
@@ -42,6 +44,12 @@ STRIP_HEADERS: frozenset[str] = frozenset(
 
 # Header prefixes stripped before storage (all headers starting with these)
 STRIP_HEADER_PREFIXES: tuple[str, ...] = ("x-stainless-",)
+
+# URL query parameters that carry credentials and must never appear in
+# stored cassettes or in the match_key. Google's REST API authenticates via
+# ?key=AIza... in the query string, so leaving it in would both leak the
+# key and tie the match_key to a single user's credentials.
+STRIP_URL_PARAMS: frozenset[str] = frozenset({"key", "api_key", "access_token", "token"})
 
 # Estimated costs in USD per 1K tokens (input, output) — label as "estimated" in all output
 MODEL_COSTS: dict[str, tuple[float, float]] = {

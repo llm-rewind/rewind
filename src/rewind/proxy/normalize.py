@@ -9,18 +9,21 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from rewind.constants import STRIP_HEADER_PREFIXES, STRIP_HEADERS
+from rewind.constants import STRIP_HEADER_PREFIXES, STRIP_HEADERS, STRIP_URL_PARAMS
 
 
 def normalize_request(method: str, path: str, body: bytes) -> str:
     """Compute match_key from method, path, and body. Returns SHA-256 hex digest.
 
     Headers excluded intentionally — contain auth tokens and SDK version noise.
+    Path is scrubbed of credential-bearing query params (e.g. Gemini ?key=AIza...)
+    before hashing, so a recorded cassette replays for any user's API key.
     """
     canonical: dict[str, Any] = {
         "method": method.upper(),
-        "path": path,
+        "path": _strip_credentialed_query_params(path),
     }
     if body:
         try:
@@ -31,6 +34,33 @@ def normalize_request(method: str, path: str, body: bytes) -> str:
 
     canonical_str = json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical_str.encode()).hexdigest()
+
+
+def strip_url_credentials(path: str) -> str:
+    """Public helper: same as _strip_credentialed_query_params.
+
+    Used by record/replay code paths that store the path in cassette
+    metadata as well as use it for match_key computation.
+    """
+    return _strip_credentialed_query_params(path)
+
+
+def _strip_credentialed_query_params(path: str) -> str:
+    """Remove credential query params (?key=..., ?api_key=...) from a path.
+
+    Operates on the path-or-URL string mitmproxy hands to flow.request.path.
+    Preserves all non-credential params and their order via parse_qsl.
+    """
+    parts = urlsplit(path)
+    if not parts.query:
+        return path
+    filtered = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() not in STRIP_URL_PARAMS
+    ]
+    new_query = urlencode(filtered)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 
 def strip_headers(headers: dict[str, str]) -> dict[str, str]:

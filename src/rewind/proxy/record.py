@@ -10,7 +10,7 @@ from typing import Any
 from mitmproxy import http
 
 from rewind.constants import PROVIDER_HOSTS
-from rewind.proxy.normalize import normalize_request, strip_headers
+from rewind.proxy.normalize import normalize_request, strip_headers, strip_url_credentials
 from rewind.proxy.streaming import is_sse_response, parse_sse_chunks
 from rewind.storage.blobs import BlobStore
 from rewind.storage.db import RewindDB, Step
@@ -43,24 +43,38 @@ def _is_streaming(body: bytes) -> bool:
 
 
 class RecordAddon:
-    def __init__(self, db: RewindDB, blobs: BlobStore, session_id: str) -> None:
+    def __init__(
+        self,
+        db: RewindDB,
+        blobs: BlobStore,
+        session_id: str,
+        *,
+        provider_hosts: dict[str, str] | None = None,
+    ) -> None:
         self._db = db
         self._blobs = blobs
         self._session_id = session_id
         self._order_idx = 0
         self._pending: dict[str, tuple[Step, float]] = {}
+        # Default to the production provider list. Tests and users adding a
+        # custom provider can pass their own mapping.
+        self._provider_hosts = provider_hosts if provider_hosts is not None else PROVIDER_HOSTS
 
     def request(self, flow: http.HTTPFlow) -> None:
-        provider = PROVIDER_HOSTS.get(flow.request.host)
+        provider = self._provider_hosts.get(flow.request.host)
         if provider is None:
             return
 
         req_body = flow.request.content or b""
-        match_key = normalize_request(flow.request.method, flow.request.path, req_body)
+        # Strip credential query params (e.g. Gemini ?key=AIza...) from the
+        # path before either hashing or storing. The match_key must not
+        # depend on the user's API key, and the stored blob must not leak it.
+        safe_path = strip_url_credentials(flow.request.path)
+        match_key = normalize_request(flow.request.method, safe_path, req_body)
 
         req_payload: dict[str, Any] = {
             "method": flow.request.method,
-            "path": flow.request.path,
+            "path": safe_path,
             "headers": strip_headers(dict(flow.request.headers)),
         }
         try:

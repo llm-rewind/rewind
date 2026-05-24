@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rewind.engines.mutate import MutationResult
 
 import click
 from rich.console import Console
@@ -34,6 +39,67 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 console = Console()
+
+
+async def _wait_for_proxy_bound(host: str, port: int, timeout: float = 10.0) -> None:
+    """Poll the proxy TCP port until it accepts connections.
+
+    The old code slept 0.8s and hoped. On a cold start that races with the
+    subprocess and silently drops the first request, which is exactly the
+    sort of thing the test suite cannot catch but a user hits on the first run.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    last_err: OSError | None = None
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
+            return
+        except OSError as e:
+            last_err = e
+            await asyncio.sleep(0.05)
+    raise TimeoutError(
+        f"Proxy on {host}:{port} did not bind within {timeout}s (last error: {last_err})"
+    )
+
+
+def _serialize_command(command: tuple[str, ...] | list[str]) -> str:
+    """Serialize argv as JSON for storage in the sessions.command column.
+
+    Using JSON instead of shell-joining means paths with spaces, quotes, and
+    backslashes round-trip exactly the same on every platform. The previous
+    implementation used " ".join then .split() which silently corrupted any
+    Windows path containing "Program Files".
+    """
+    import json
+
+    return json.dumps(list(command))
+
+
+def _split_command(command_str: str) -> list[str]:
+    """Parse a stored command back into argv.
+
+    New sessions store the command as a JSON-encoded list. Older sessions
+    (pre-v0.2.0) stored a space-joined string, so fall back to shlex with the
+    platform-appropriate posix flag when JSON parsing fails. POSIX shlex
+    treats backslash as escape which mangles Windows paths, so non-POSIX
+    mode is used on Windows.
+    """
+    import json
+
+    s = command_str.strip()
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return shlex.split(command_str, posix=os.name != "nt")
 
 
 def _get_git_hash() -> str | None:
@@ -67,13 +133,20 @@ def _generate_ca(rewind_dir: Path) -> None:
     from cryptography.x509.oid import NameOID
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=CA_KEY_BITS)
+    public_key = key.public_key()
     now = datetime.now(UTC)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, CA_COMMON_NAME)])
+    # Python 3.13's stricter X.509 verifier rejects chains where the trust
+    # anchor lacks a SubjectKeyIdentifier extension ("Missing Subject Key
+    # Identifier"). Without SKI mitmproxy will still issue per-host certs,
+    # but no modern client will validate them, and the whole HTTPS
+    # interception path silently fails with a ConnectError. RFC 5280
+    # recommends SKI on every CA cert anyway.
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
-        .public_key(key.public_key())
+        .public_key(public_key)
         .serial_number(x509.random_serial_number())
         .not_valid_before(now)
         .not_valid_after(now + timedelta(days=CA_CERT_DAYS))
@@ -91,6 +164,10 @@ def _generate_ca(rewind_dir: Path) -> None:
                 decipher_only=False,
             ),
             critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(public_key),
+            critical=False,
         )
         .sign(key, hashes.SHA256())
     )
@@ -191,14 +268,14 @@ async def _record_async(command: tuple[str, ...], name: str | None, port: int) -
     blobs = BlobStore()
     session = Session(
         agent_name=name or Path(command[0]).stem,
-        command=" ".join(command),
+        command=_serialize_command(command),
         git_hash=_get_git_hash(),
     )
     db.save_session(session)
 
     stop = asyncio.Event()
     proxy_task = asyncio.create_task(run_record_proxy(db, blobs, session.id, port=port, _stop=stop))
-    await asyncio.sleep(0.8)  # wait for proxy to bind
+    await _wait_for_proxy_bound("127.0.0.1", port)
 
     console.print(f"[green]●[/green] Recording [cyan]{session.id[:8]}[/cyan]")
     console.print(f"  Proxy:   [dim]http://127.0.0.1:{port}[/dim]")
@@ -212,8 +289,17 @@ async def _record_async(command: tuple[str, ...], name: str | None, port: int) -
         "REQUESTS_CA_BUNDLE": str(CA_CERT_PATH),
     }
 
+    # Critical: must NOT use subprocess.run() here. That call blocks the
+    # asyncio event loop, which means the mitmproxy task running on the
+    # same loop cannot process any incoming requests for the entire
+    # duration of the subprocess. The agent's HTTPS calls would hit the
+    # proxy port, complete the TCP handshake, then hang because the loop
+    # never wakes up to handle the CONNECT. asyncio.create_subprocess_exec
+    # cooperates with the loop, so the proxy keeps serving while the
+    # subprocess runs.
     t0 = time.monotonic()
-    proc = subprocess.run(list(command), env=env, check=False)
+    proc = await asyncio.create_subprocess_exec(*command, env=env)
+    returncode = await proc.wait()
     elapsed = time.monotonic() - t0
 
     stop.set()
@@ -228,7 +314,7 @@ async def _record_async(command: tuple[str, ...], name: str | None, port: int) -
     session.total_cost_usd = total_cost
     db.save_session(session)
 
-    icon = "[green]✓[/green]" if proc.returncode == 0 else f"[red]✗ exit {proc.returncode}[/red]"
+    icon = "[green]✓[/green]" if returncode == 0 else f"[red]✗ exit {returncode}[/red]"
     console.print(
         f"\n{icon} Captured [cyan]{len(steps)}[/cyan] LLM call(s)"
         f" — ~${total_cost:.4f} | {elapsed:.1f}s"
@@ -275,7 +361,7 @@ async def _replay_async(
     proxy_task = asyncio.create_task(
         run_replay_proxy(db, blobs, session.id, port=port, permissive=permissive, _stop=stop)
     )
-    await asyncio.sleep(0.8)
+    await _wait_for_proxy_bound("127.0.0.1", port)
 
     console.print(f"[green]▶[/green] Replaying [cyan]{session.id[:8]}[/cyan] ({mode_label} mode)")
     console.print(f"  Cassette: [dim]{len(steps)} step(s)[/dim]")
@@ -291,8 +377,11 @@ async def _replay_async(
         "REWIND_MODE": "replay",
     }
 
+    # Same loop-blocking rule as record: must use async subprocess so the
+    # ReplayAddon task keeps serving cassette bytes while the agent runs.
     t0 = time.monotonic()
-    proc = subprocess.run(command_str.split(), env=env, check=False)
+    proc = await asyncio.create_subprocess_exec(*_split_command(command_str), env=env)
+    returncode = await proc.wait()
     elapsed = time.monotonic() - t0
 
     stop.set()
@@ -301,7 +390,7 @@ async def _replay_async(
     except TimeoutError:
         proxy_task.cancel()
 
-    icon = "[green]✓[/green]" if proc.returncode == 0 else f"[red]✗ exit {proc.returncode}[/red]"
+    icon = "[green]✓[/green]" if returncode == 0 else f"[red]✗ exit {returncode}[/red]"
     console.print(f"\n{icon} Replay complete — {elapsed:.1f}s (zero LLM cost)")
 
 
@@ -501,6 +590,204 @@ def bisect(session_id_a: str, session_id_b: str) -> None:
     blobs = BlobStore()
     result = bisect_sessions(db, blobs, session_id_a, session_id_b)
     console.print(result.summary())
+
+
+@cli.command()
+@click.argument("session_id")
+@click.option(
+    "--command",
+    "override_command",
+    default=None,
+    help="Override stored command (must be the same agent that produced the session)",
+)
+@click.option(
+    "--port",
+    default=DEFAULT_PROXY_PORT,
+    show_default=True,
+    help="Proxy listen port",
+)
+@click.option(
+    "--timeout",
+    default=60,
+    show_default=True,
+    help="Per-mutation subprocess timeout in seconds",
+)
+def mutate(
+    session_id: str,
+    override_command: str | None,
+    port: int,
+    timeout: int,
+) -> None:
+    """Mutation-test an agent against a recorded session.
+
+    Systematically perturbs the cassette (drops steps, replaces responses
+    with errors, truncates, returns 429/500) and re-runs the agent
+    against each mutation. Reports which mutations the agent survives
+    and which expose fragility. The novel piece: tells you where your
+    agent will silently misbehave when production drifts.
+    """
+    asyncio.run(_mutate_async(session_id, override_command, port, timeout))
+
+
+async def _mutate_async(
+    session_id: str,
+    override_command: str | None,
+    port: int,
+    timeout: int,
+) -> None:
+    from rewind.engines.mutate import MutationResult, generate_mutations
+    from rewind.exceptions import RewindSessionNotFoundError
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB.get_or_create()
+    blobs = BlobStore()
+
+    session = db.get_session(session_id)
+    if session is None:
+        raise RewindSessionNotFoundError(session_id)
+    command_str = override_command or session.command or ""
+    if not command_str:
+        console.print("[red]No command stored.[/red] Use --command to specify one.")
+        raise SystemExit(1)
+
+    console.print(f"[cyan]Mutation testing session {session.id[:8]}[/cyan]")
+    console.print(f"  Command: [dim]{command_str}[/dim]\n")
+
+    # Baseline: run the agent against the unmutated cassette so we know
+    # what "correct" output looks like.
+    console.print("[dim]Running baseline replay...[/dim]")
+    baseline_code, baseline_out = await _run_replay(
+        db, blobs, session.id, command_str, port=port, timeout=timeout
+    )
+    if baseline_code != 0:
+        console.print(
+            f"[yellow]Baseline exits non-zero ({baseline_code}). "
+            "Mutation results may be hard to interpret.[/yellow]\n"
+        )
+
+    mutations = list(generate_mutations(db, session.id))
+    if not mutations:
+        console.print("[yellow]No mutable steps in this session.[/yellow]")
+        return
+
+    console.print(f"Running {len(mutations)} mutations...\n")
+
+    results: list[MutationResult] = []
+    for m in mutations:
+        new_id = m.apply(db, blobs, session.id)
+        rc, out = await _run_replay(db, blobs, new_id, command_str, port=port, timeout=timeout)
+        results.append(
+            MutationResult(
+                mutation=m,
+                mutated_session_id=new_id,
+                exit_code=rc,
+                stdout=out,
+                crashed=(rc is None or rc != 0),
+                output_changed=(out != baseline_out),
+            )
+        )
+
+    _print_mutation_report(results)
+
+
+async def _run_replay(
+    db: object,
+    blobs: object,
+    session_id: str,
+    command_str: str,
+    *,
+    port: int,
+    timeout: int,
+) -> tuple[int | None, str]:
+    """Run replay for one cassette and return (exit_code, captured stdout)."""
+    from rewind.proxy.addon import run_replay_proxy
+
+    stop = asyncio.Event()
+    proxy_task = asyncio.create_task(
+        run_replay_proxy(
+            db,  # type: ignore[arg-type]
+            blobs,  # type: ignore[arg-type]
+            session_id,
+            port=port,
+            permissive=False,
+            _stop=stop,
+        )
+    )
+    try:
+        await _wait_for_proxy_bound("127.0.0.1", port)
+        env = {
+            **os.environ,
+            "HTTPS_PROXY": f"http://127.0.0.1:{port}",
+            "HTTP_PROXY": f"http://127.0.0.1:{port}",
+            "SSL_CERT_FILE": str(CA_CERT_PATH),
+            "REQUESTS_CA_BUNDLE": str(CA_CERT_PATH),
+            "REWIND_MODE": "replay",
+        }
+        proc = await asyncio.create_subprocess_exec(
+            *_split_command(command_str),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None, ""
+        return proc.returncode, stdout_b.decode("utf-8", errors="replace")
+    finally:
+        stop.set()
+        try:
+            await asyncio.wait_for(proxy_task, timeout=3.0)
+        except TimeoutError:
+            proxy_task.cancel()
+
+
+def _print_mutation_report(results: list[MutationResult]) -> None:
+    from rich.table import Table
+
+    from rewind.engines.mutate import MutationResult
+
+    table = Table(title="Mutation Report", show_lines=False)
+    table.add_column("Mutation")
+    table.add_column("Step", justify="right")
+    table.add_column("Outcome")
+    table.add_column("Detail")
+
+    survived = 0
+    output_changed = 0
+    crashed = 0
+    for r in results:
+        assert isinstance(r, MutationResult)
+        if r.crashed:
+            outcome = "[red]CRASHED[/red]"
+            crashed += 1
+        elif r.output_changed:
+            outcome = "[yellow]OUTPUT CHANGED[/yellow]"
+            output_changed += 1
+        else:
+            outcome = "[green]SURVIVED[/green]"
+            survived += 1
+        table.add_row(
+            r.mutation.kind.value,
+            str(r.mutation.target_order_idx),
+            outcome,
+            r.mutation.description,
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[green]Survived: {survived}[/green] | "
+        f"[yellow]Changed: {output_changed}[/yellow] | "
+        f"[red]Crashed: {crashed}[/red] | Total: {len(results)}"
+    )
+    if crashed:
+        console.print(
+            "\n[red]Crashed mutations indicate fragility. "
+            "The agent does not gracefully handle these failure modes.[/red]"
+        )
 
 
 @cli.command(name="export")

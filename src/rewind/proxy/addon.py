@@ -24,9 +24,15 @@ async def run_record_proxy(
     host: str = PROXY_HOST,
     port: int = DEFAULT_PROXY_PORT,
     confdir: Path = REWIND_DIR,
+    provider_hosts: dict[str, str] | None = None,
+    ssl_insecure: bool = False,
     _stop: asyncio.Event | None = None,
 ) -> None:
-    """Run mitmproxy with RecordAddon. Blocks until _stop is set or KeyboardInterrupt."""
+    """Run mitmproxy with RecordAddon. Blocks until _stop is set or KeyboardInterrupt.
+
+    `ssl_insecure` is intended for tests that point upstream at a server with
+    a self-signed certificate. Never set it in production.
+    """
     from mitmproxy.options import Options
     from mitmproxy.tools.dump import DumpMaster
 
@@ -34,10 +40,12 @@ async def run_record_proxy(
         listen_host=host,
         listen_port=port,
         confdir=str(confdir),
-        ssl_insecure=False,
+        ssl_insecure=ssl_insecure,
     )
     master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-    master.addons.add(RecordAddon(db, blobs, session_id))  # type: ignore[no-untyped-call]
+    master.addons.add(  # type: ignore[no-untyped-call]
+        RecordAddon(db, blobs, session_id, provider_hosts=provider_hosts)
+    )
 
     if _stop is not None:
 
@@ -64,9 +72,16 @@ async def run_replay_proxy(
     port: int = DEFAULT_PROXY_PORT,
     confdir: Path = REWIND_DIR,
     permissive: bool = False,
+    provider_hosts: dict[str, str] | None = None,
+    ssl_insecure: bool = False,
     _stop: asyncio.Event | None = None,
 ) -> None:
-    """Run mitmproxy with ReplayAddon. Blocks until _stop is set or KeyboardInterrupt."""
+    """Run mitmproxy with ReplayAddon. Blocks until _stop is set or KeyboardInterrupt.
+
+    Replay generally does not contact upstream, so `ssl_insecure` is rarely
+    relevant in replay mode unless a cassette miss in permissive mode falls
+    through to a self-signed upstream during testing.
+    """
     from mitmproxy.options import Options
     from mitmproxy.tools.dump import DumpMaster
 
@@ -74,10 +89,12 @@ async def run_replay_proxy(
         listen_host=host,
         listen_port=port,
         confdir=str(confdir),
-        ssl_insecure=False,
+        ssl_insecure=ssl_insecure,
     )
     master = DumpMaster(opts, with_termlog=False, with_dumper=False)
-    master.addons.add(ReplayAddon(db, blobs, session_id, permissive=permissive))  # type: ignore[no-untyped-call]
+    master.addons.add(  # type: ignore[no-untyped-call]
+        ReplayAddon(db, blobs, session_id, permissive=permissive, provider_hosts=provider_hosts)
+    )
 
     if _stop is not None:
 

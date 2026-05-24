@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from rewind.proxy.normalize import normalize_request, strip_headers
+from rewind.proxy.normalize import normalize_request, strip_headers, strip_url_credentials
 
 # --- normalize_request ---
 
@@ -170,3 +170,56 @@ def test_strip_headers_no_auth_passthrough() -> None:
     headers = {"content-type": "application/json", "accept": "*/*"}
     result = strip_headers(headers)
     assert result == headers
+
+
+# --- URL credential stripping (Gemini ?key=AIza..., ?api_key=, etc) ---
+
+
+@pytest.mark.unit
+def test_strip_url_credentials_removes_key_param() -> None:
+    path = "/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaSyTOPSECRET"
+    cleaned = strip_url_credentials(path)
+    assert "AIzaSyTOPSECRET" not in cleaned
+    assert "key=" not in cleaned
+    assert cleaned == "/v1beta/models/gemini-2.0-flash:generateContent"
+
+
+@pytest.mark.unit
+def test_strip_url_credentials_removes_api_key_param() -> None:
+    path = "/v1/messages?api_key=sk-secret&model=foo"
+    cleaned = strip_url_credentials(path)
+    assert "sk-secret" not in cleaned
+    assert "api_key" not in cleaned
+    assert "model=foo" in cleaned  # non-credential params preserved
+
+
+@pytest.mark.unit
+def test_strip_url_credentials_preserves_non_credential_params() -> None:
+    path = "/v1/chat?stream=true&temperature=0.7"
+    assert strip_url_credentials(path) == path
+
+
+@pytest.mark.unit
+def test_strip_url_credentials_no_query_string() -> None:
+    assert strip_url_credentials("/v1/chat/completions") == "/v1/chat/completions"
+
+
+@pytest.mark.unit
+def test_normalize_request_match_key_stable_across_different_api_keys() -> None:
+    """Critical: a cassette recorded with one user's Gemini key must replay
+    for another user. The match_key must not depend on the ?key= value."""
+    path_a = "/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaUSER_A"
+    path_b = "/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaUSER_B"
+    body = json.dumps({"contents": [{"parts": [{"text": "hi"}]}]}).encode()
+    assert normalize_request("POST", path_a, body) == normalize_request("POST", path_b, body)
+
+
+@pytest.mark.unit
+def test_strip_headers_removes_x_goog_api_key() -> None:
+    headers = {
+        "x-goog-api-key": "AIzaSyTOPSECRET",
+        "content-type": "application/json",
+    }
+    result = strip_headers(headers)
+    assert "x-goog-api-key" not in {k.lower() for k in result}
+    assert "content-type" in result
