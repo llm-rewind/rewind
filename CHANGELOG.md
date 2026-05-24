@@ -8,9 +8,97 @@ All notable changes to this project are documented here. Format follows
 
 ### Planned
 
-- Live recording cassette via Google Gemini (drops the synthetic placeholder)
-- `x-goog-api-key` header stripping + URL `?key=` redaction for Gemini support
 - gRPC interception support (Gemini SDK defaults to gRPC, currently bypasses proxy)
+- Cross-platform CI matrix (currently Ubuntu only; tests run locally on Windows)
+
+## [0.2.0] - 2026-05-24
+
+The release that makes the previous one honest. v0.1.0 shipped without
+end-to-end proof that the record-replay loop worked end-to-end against
+real provider traffic. An internal audit found three production bugs
+that quietly broke HTTPS interception on modern Python. All three are
+fixed and covered by tests that drive real bytes through a real
+mitmproxy instance. Also adds the two features that actually
+differentiate this project from VCR.py and Docker cagent: divergence
+cause inference in `bisect` and a mutation-testing harness.
+
+### Added
+
+- `rewind mutate <session-id>`. Systematically perturbs the cassette
+  (drop step, empty response, truncate, 429, 500) and re-runs the
+  agent against each mutation. Reports survival rate per mutation
+  kind. Surfaces fragility before production drift does.
+- Divergence cause inference in `rewind bisect`. Classifies the root
+  cause into `model_version_changed`, `prompt_drift`,
+  `tool_list_changed`, `tool_output_drift`, `llm_nondeterminism`,
+  `step_count_differs`, or `step_type_changed`, with an actionable
+  detail line for each.
+- `x-goog-api-key` header is now stripped on capture.
+- URL query parameters carrying credentials (`key`, `api_key`,
+  `access_token`, `token`) are stripped from the path before either
+  the `match_key` hash or the stored blob. A cassette recorded with
+  one user's Gemini key now replays for any other user.
+- `tests/cassettes/gemini_simple_agent.rw`: a real cassette recorded
+  against `generativelanguage.googleapis.com` with zero key residue.
+- End-to-end test harness: local self-signed HTTPS server in
+  `tests/fixtures/local_llm_server.py` plus a threaded mitmproxy
+  runner in `tests/fixtures/proxy_runner.py`. Used by three new
+  integration tests that prove the record, replay, and SSE round-trip
+  paths end-to-end with real HTTP.
+- 40 new unit and integration tests; full suite is now 140 tests.
+
+### Changed
+
+- `RecordAddon` and `ReplayAddon` now accept an optional
+  `provider_hosts` parameter so users can record against providers
+  beyond the OpenAI/Anthropic/Gemini defaults without editing the
+  source. The same parameter unlocks honest end-to-end tests.
+- `run_record_proxy` and `run_replay_proxy` accept `ssl_insecure` for
+  test scenarios that hit self-signed upstreams. Production paths
+  default to `False` and must opt in.
+- Session command is now stored as a JSON-encoded argv list rather
+  than a space-joined string. Paths with spaces and quotes survive
+  the round-trip. Old string-formatted entries are still parsed via
+  shlex with the platform-appropriate posix mode.
+
+### Fixed
+
+- **CA cert was missing the SubjectKeyIdentifier extension.** Python
+  3.13's stricter X.509 verifier rejects chains anchored on certs
+  without SKI, which means every cert mitmproxy issued was unusable
+  by modern clients. HTTPS interception silently failed with a
+  `ConnectError`. All users should re-run `rewind init` after
+  upgrading to regenerate the CA.
+- **`subprocess.run` was blocking the event loop.** The CLI started
+  mitmproxy as an asyncio task and then ran the agent via a blocking
+  `subprocess.run` on the same loop. The proxy could not service any
+  request until the agent exited, so the agent timed out on its first
+  HTTPS call. Replaced with `asyncio.create_subprocess_exec`.
+- **Strict-mode cassette miss fell through to the real upstream.** A
+  `raise CassetteMissError` inside a mitmproxy addon hook is logged
+  and the request continues upstream, which silently calls the live
+  LLM. `ReplayAddon` now writes a 599 HTTP response with a structured
+  error body and `X-Rewind-Cassette-Miss` header to short-circuit the
+  upstream dial.
+- Proxy-bind race: `cli.py` used to sleep 0.8s and hope; now polls
+  the TCP port until it accepts connections.
+- `rewind --version` was looking up the wrong distribution name
+  because the package is `llm-rewind` and the command is `rewind`.
+
+### Removed
+
+- `src/rewind/engines/replay.py`: an empty stub from the original
+  phase plan. Replay orchestration lives in `cli.py:replay` and
+  `proxy/addon.py:run_replay_proxy`.
+- `src/rewind/sdk/patches.py`: an empty stub. The decorator path uses
+  contextvars; per-SDK patching turned out to be unnecessary.
+
+### Security
+
+- Stricter strict-mode enforcement: cassette miss never reaches the
+  upstream provider in `REWIND_MODE=replay` even under realistic
+  mitmproxy lifecycle conditions, which the previous version's unit
+  tests did not exercise.
 
 ## [0.1.0] - 2026-05-23
 
@@ -48,5 +136,6 @@ and (with REST transport) Google Gemini.
   live API. Permissive passthrough requires an explicit `--permissive` flag
 - CA private key never appears in logs, error messages, or exports
 
-[Unreleased]: https://github.com/llm-rewind/rewind/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/llm-rewind/rewind/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/llm-rewind/rewind/releases/tag/v0.2.0
 [0.1.0]: https://github.com/llm-rewind/rewind/releases/tag/v0.1.0

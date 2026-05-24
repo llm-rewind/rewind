@@ -1,57 +1,54 @@
 # Rewind — Time-Travel Debugger for AI Agents
 
-> Record any production run. Replay any failure. Find the exact step that broke.
-
-```
-$ rewind bisect run-good-7f3a run-bad-9b2c
-
-  ✗ First divergence at step 4 (llm_call)
-  ─────────────────────────────────────────────────────────────
-  Model:    claude-sonnet-4-6 (both runs)
-  Provider: anthropic
-
-  Step 1   match  ✓  "Understood, I'll look into the account."
-  Step 2   match  ✓  [tool_call: lookup_account → {status: active}]
-  Step 3   match  ✓  "The account shows a balance of $1,240."
-  Step 4  DIVERGED ✗
-    Good:  "I'll proceed with the transfer."
-    Bad:   "I cannot complete this action without explicit confirmation."
-
-  Likely cause: prompt drift between runs (system prompt changed 09:14 UTC)
-  Steps matched: 3 / 12
-```
+> Record any production run. Bisect to the failing step. Mutation-test
+> for the failure modes you have not hit yet.
 
 [![CI](https://github.com/llm-rewind/rewind/actions/workflows/tests.yml/badge.svg)](https://github.com/llm-rewind/rewind/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/llm-rewind)](https://pypi.org/project/llm-rewind/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
-
-## The Problem
-
-AI agents fail in production. You can't reproduce it.
-
-The model call that worked in staging silently uses a different system prompt. A tool returns slightly different output under load. A model version rolls out at midnight and three days later your agent starts refusing requests it used to handle. You have logs, but logs show *what* happened — not *why* it changed.
-
-Rewind gives you the recording.
-
----
-
-## The Solution — 4 Commands
-
-```bash
-# 1. Record any agent run (works with any language or framework)
-rewind record python my_agent.py --input '{"query": "process refund #8821"}'
-
-# 2. Replay it locally — zero LLM API cost, deterministic output
-rewind replay 7f3a2b
-
-# 3. Find exactly where a bad run diverged from a good one
-rewind bisect run-good-7f3a run-bad-9b2c
-
-# 4. Export a cassette to share with your team
-rewind export 7f3a2b --output incident-8821.rw
 ```
+$ rewind bisect run-good-7f3a run-bad-9b2c
+
+First divergence at step 4
+  Session A: run-good-7f3a  model=gpt-4o-2025-11
+  Session B: run-bad-9b2c   model=gpt-4o-2026-05
+  Cause:    model_version_changed
+  Detail:   model changed: 'gpt-4o-2025-11' -> 'gpt-4o-2026-05'.
+            Model upgrades are the highest-likelihood cause
+            of behaviour shifts.
+```
+
+The point of Rewind is the last two lines. Other tools tell you that
+two runs of your agent differ. Rewind tells you why.
+
+---
+
+## What Makes This Different
+
+Cassette-style HTTP replay for LLMs is not new. VCR.py has shipped this
+pattern since 2010; vcr-langchain since 2023; Docker cagent shipped a
+nearly identical implementation in 2026 and inspired several pieces of
+this codebase (see `docs/adr/`).
+
+What Rewind adds on top of that base layer:
+
+**Cause inference.** `rewind bisect` classifies the reason two runs
+diverged: was it a model version bump, a tool returning different
+output, prompt drift between deploys, or model non-determinism? Every
+other tool in the space stops at "step N differs".
+
+**Mutation testing for agents.** `rewind mutate` is Stryker for LLM
+agents. It systematically perturbs a recorded cassette: drops steps,
+returns 429s, truncates responses, replaces tool outputs with
+errors. It re-runs your agent against each mutation and reports which
+ones the agent silently fails. Tells you where production drift will
+bite before it does.
+
+Everything else (HTTPS MITM via mitmproxy, content-addressed blobs,
+SSE streaming preservation, `pytest-rewind`) is table stakes that
+existing tools also do. The cause inference and mutation harness are
+the part that justifies the project.
 
 ---
 
@@ -59,49 +56,121 @@ rewind export 7f3a2b --output incident-8821.rw
 
 ```bash
 pip install llm-rewind
-rewind init      # generates local CA cert for HTTPS interception
+rewind init
 ```
 
-That's it. No account, no cloud, no API key for Rewind itself.
+`rewind init` generates a local CA cert at `~/.rewind/ca.pem` for
+HTTPS interception. On macOS and Linux the trust step is one
+command; on Windows it needs Administrator. `rewind init` prints the
+exact command for your platform after generating the cert.
 
 ---
 
-## Quick Start — First Cassette in 3 Steps
+## Three Loops
 
-**Step 1: Record**
+### 1. Reproduce a production failure
+
 ```bash
-export ANTHROPIC_API_KEY=sk-...   # your existing key
+ANTHROPIC_API_KEY=sk-...
 rewind record python my_agent.py
-# → Session recorded: 7f3a2b9c  (12 LLM calls, 3,241 tokens)
-```
+# Captured 12 LLM call(s)  ~$0.034  | 8.4s
 
-**Step 2: Replay** (no API key needed)
-```bash
+rewind list
+# 7f3a2b9c  my_agent  2026-05-23 14:35:29   12  $0.034  c0e577f
+
 rewind replay 7f3a2b
-# → Replaying 12 steps from cassette... done. Output identical.
+# Replay complete  8.4s (zero LLM cost)
 ```
 
-**Step 3: Inspect**
+### 2. Find the exact step a regression broke
+
 ```bash
-rewind inspect 7f3a2b
-# → Rich table: step-by-step model calls, token counts, latency
+rewind bisect run-good-7f3a run-bad-9b2c
+# First divergence at step 4
+#   Cause: tool_output_drift
+#   Detail: previous step (3, tool_call) returned different output.
+#           Likely root cause is upstream; bisect that step first.
 ```
+
+### 3. Pressure-test before shipping
+
+```bash
+rewind mutate 7f3a2b9c
+
+# Mutation Report
+# +-------------------+------+---------+----------------------------+
+# | Mutation          | Step | Outcome | Detail                     |
+# +===================+======+=========+============================+
+# | empty_response    | 0    | SURVIVED| ...                        |
+# | provider_500      | 0    | CRASHED | unhandled HTTPStatusError  |
+# | error_response    | 4    | CHANGED | agent ignored 429 retry    |
+# | truncate_response | 7    | CRASHED | JSONDecodeError            |
+# +-------------------+------+---------+----------------------------+
+# Survived: 9 | Changed: 3 | Crashed: 3 | Total: 15
+```
+
+The Crashed row is what you fix before deploying.
 
 ---
 
 ## How It Works
 
-Rewind runs as a local HTTPS proxy (via [mitmproxy](https://mitmproxy.org)) that intercepts every LLM API call your agent makes — to OpenAI, Anthropic, or Gemini. Each request and response is stored in a content-addressed blob store (SHA-256, zstd-compressed) with DuckDB metadata. Because the proxy operates at the HTTP layer, **Rewind works with any language and any framework** — Python, Node.js, Go, LangChain, LlamaIndex, raw SDK calls, all of it.
+Rewind runs as a local HTTPS proxy (via [mitmproxy](https://mitmproxy.org))
+that intercepts every LLM API call your agent makes — OpenAI,
+Anthropic, or Gemini. Each request and response is stored in a
+content-addressed blob store (SHA-256, zstd-compressed) with DuckDB
+metadata. Because the proxy operates at the HTTP layer, **Rewind works
+with any language and any framework**: Python, Node.js, Go, LangChain,
+LlamaIndex, raw SDK calls.
 
-On replay, Rewind starts the same proxy in replay mode. Incoming requests are matched by a canonical fingerprint (`match_key`) that strips volatile fields like `tool_call_id` while preserving semantic content. Matched requests get the exact recorded response bytes — SSE streaming preserved, token counts preserved, latency simulated. No LLM calls go out. The bisect engine walks two session recordings in parallel and identifies the first step where responses diverge, giving you a precise root cause instead of a log diff.
+On replay, Rewind starts the same proxy in replay mode. Incoming
+requests get matched by a canonical fingerprint (`match_key`) that
+strips volatile fields like `tool_call_id` and credential query
+parameters while preserving semantic content. Matched requests get the
+exact recorded response bytes back. Strict mode never falls through to
+the live API; a cassette miss returns HTTP 599 with a structured error
+body and a clear `X-Rewind-Cassette-Miss` header. No quiet billing.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+`docs/ARCHITECTURE.md` has the full design and the ADRs.
 
 ---
 
-## SDK Decorator (Python shortcut)
+## Comparison
 
-Don't want to configure a proxy? Use the decorator mode for pure-Python agents:
+| Feature                             | Rewind | LangSmith | Braintrust | Laminar | Helicone | vcr-langchain | Docker cagent |
+| ----------------------------------- | ------ | --------- | ---------- | ------- | -------- | ------------- | ------------- |
+| True deterministic replay           | yes    | no        | no         | no      | yes      | yes           | yes           |
+| Cause inference on divergence       | yes    | no        | no         | no      | no       | no            | no            |
+| Mutation testing for agents         | yes    | no        | no         | no      | no       | no            | no            |
+| Framework-agnostic (HTTP-level)     | yes    | no        | no         | no      | yes      | no            | no            |
+| Local-only, no cloud                | yes    | no        | no         | no      | yes      | yes           | yes           |
+| Open source                         | MIT    | partial   | partial    | Apache  | MIT      | MIT           | Apache        |
+
+LangSmith, Braintrust, and Laminar are observability platforms — they
+show you what happened. vcr-langchain, Helicone, and cagent are
+cassette/proxy tools — they let you replay. Rewind is positioned as a
+**debugger**: replay plus the two engines (bisect cause inference,
+mutation testing) that turn a recording into a diagnosis.
+
+---
+
+## pytest Integration
+
+```python
+@pytest.mark.rewind(cassette="tests/cassettes/customer_support.rw")
+async def test_agent_handles_refund_request():
+    result = await run_customer_support_agent("I want a refund")
+    assert "refund" in result.lower()
+```
+
+Cassettes get committed to git. CI runs them with zero API cost and no
+keys configured. See `docs/testing/STRATEGY.md`.
+
+---
+
+## SDK Decorator (Python convenience)
+
+For pure-Python agents that do not want a proxy setup:
 
 ```python
 import rewind
@@ -110,89 +179,53 @@ import rewind
 async def run_agent(query: str) -> str:
     ...
 
-@rewind.tool  # records non-HTTP tool calls too
+@rewind.tool
 def search_database(query: str) -> list[dict]:
     ...
 ```
 
----
-
-## Comparison
-
-| Feature | Rewind | LangSmith | Braintrust | Laminar |
-|---------|--------|-----------|------------|---------|
-| True deterministic replay | ✅ | ❌ | ❌ | ❌ |
-| Works with any language | ✅ | ❌ Python/JS | ❌ Python/JS | ❌ Python |
-| Local / private (no cloud) | ✅ | ❌ cloud | ❌ cloud | ❌ cloud |
-| Zero-cost replay | ✅ | ❌ | ❌ | ❌ |
-| Bisect to find divergence | ✅ | ❌ | ❌ | ❌ |
-| Shareable cassette files | ✅ `.rw` | ✅ datasets | ✅ datasets | ✅ datasets |
-| Cost analytics | ✅ | ✅ | ✅ | ✅ |
-| Open source | ✅ MIT | ✅ MIT | ✅ MIT | ✅ Apache |
-
-**The key difference:** LangSmith, Braintrust, and Laminar are *observability* tools — they show you what happened. Rewind is a *debugger* — it lets you reproduce and isolate failures deterministically.
-
----
-
-## Supported Providers
-
-| Provider | Recording | Streaming SSE |
-|----------|-----------|---------------|
-| Anthropic (`api.anthropic.com`) | ✅ | ✅ |
-| OpenAI (`api.openai.com`) | ✅ | ✅ |
-| Google Gemini | ✅ | ✅ |
-
----
-
-## pytest Integration
-
-```python
-# Install: pip install llm-rewind
-
-@pytest.mark.rewind(cassette="tests/cassettes/customer_support.rw")
-async def test_agent_handles_refund_request():
-    result = await run_customer_support_agent("I want a refund")
-    assert "refund" in result.lower()
-```
-
-Cassettes are committed to git. Tests run with zero API cost in CI. See [docs/testing/STRATEGY.md](docs/testing/STRATEGY.md).
+The proxy approach is recommended for any non-Python or
+multi-language agent.
 
 ---
 
 ## CLI Reference
 
 ```bash
-rewind init                               # generate local CA cert
-rewind record <command>                   # record an agent run
-rewind replay <session-id>               # replay from cassette
-rewind list                              # list recorded sessions
-rewind inspect <session-id>              # inspect step details
-rewind diff <session-a> <session-b>      # compare two sessions
-rewind bisect <good-run> <bad-run>       # find first divergence
-rewind export <session-id> [--output f.rw]   # export cassette file
-rewind import <cassette.rw>              # import cassette to local DB
-rewind stats [--days 30]                 # cost analytics
+rewind init                                # generate local CA cert
+rewind record <command>                    # record an agent run
+rewind replay <session-id>                 # replay from cassette
+rewind list                                # list recorded sessions
+rewind inspect <session-id>                # inspect step details
+rewind diff <a> <b>                        # compare two sessions
+rewind bisect <good> <bad>                 # find divergence + classify cause
+rewind mutate <session-id>                 # mutation test the agent
+rewind export <session-id> [--output f.rw] # export cassette file
+rewind import <cassette.rw>                # import cassette to local DB
+rewind stats [--days 30]                   # cost analytics
 ```
 
 ---
 
 ## Contributing
 
+See [CONTRIBUTING.md](CONTRIBUTING.md). Setup:
+
 ```bash
 git clone https://github.com/llm-rewind/rewind
 cd rewind
 pip install -e ".[dev]"
-pytest                  # all tests use cassettes — no API key needed
-ruff check src/ tests/
-mypy src/ --strict
+pytest                  # 140 tests, no API key needed
+ruff check src/ tests/ pytest_rewind/
+mypy src/ pytest_rewind/ --strict
 ```
 
-Issues and PRs welcome. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions and ADRs.
+The local end-to-end tests stand up an HTTPS server and a real
+mitmproxy instance, so they exercise the same code path a user hits.
+They run on CI for Python 3.11, 3.12, and 3.13.
 
 ---
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-Built because production AI agent debugging was broken and no one had fixed it yet.
