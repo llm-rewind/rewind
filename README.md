@@ -64,6 +64,11 @@ HTTPS interception. On macOS and Linux the trust step is one
 command; on Windows it needs Administrator. `rewind init` prints the
 exact command for your platform after generating the cert.
 
+**New user? Follow the [10-minute end-to-end walkthrough](docs/GETTING_STARTED.md)** —
+clone the repo, record one real Gemini call (free tier), replay it
+without an API key, and run mutation testing to see fragility in
+the demo agent.
+
 ---
 
 ## Three Loops
