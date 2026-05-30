@@ -15,6 +15,19 @@ All notable changes to this project are documented here. Format follows
   different response). Reports the full chain with a heuristic confidence
   (capped at 0.95) that the first divergence is the true root. New module
   `src/rewind/engines/explain.py`; reuses the bisect cause inference.
+- `rewind mutate --semantic` — semantic-drift mutation. A small model
+  (Gemini Flash) rewrites a recorded assistant response into a plausible-
+  but-wrong variant, surfacing agents that mishandle subtly incorrect
+  upstream output rather than only transport faults. New module
+  `src/rewind/engines/semantic.py`. The mutator is injected behind a
+  protocol so tests never call a live model; the real implementation sends
+  its key as the `x-goog-api-key` header and never logs it.
+- `rewind benchmark <session>` — fragility scoring + leaderboard. Reduces a
+  mutation run to a fragility score `(changed + crashed) / total` and
+  writes a ranked `leaderboard.json` + `index.html`. New module
+  `src/rewind/engines/benchmark.py`, driver `scripts/run_fragility_benchmark.py`,
+  and a weekly `.github/workflows/fragility.yml` that re-scores recorded
+  agents in replay mode and publishes the board.
 
 ### Planned
 

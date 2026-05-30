@@ -163,6 +163,28 @@ Input:  session_a (good run), session_b (bad run)
 the next question — what did that cause downstream, and is it actually
 the root? See `src/rewind/engines/explain.py`.
 
+## Layer 6: Mutation + Fragility Benchmark
+
+```
+Mutation (rewind mutate):
+  Materialise perturbed copies of a cassette and re-run the agent against
+  each in replay mode. Syntactic faults: drop step, empty/truncated body,
+  429, 500. Semantic fault (--semantic): a small model (Gemini Flash)
+  rewrites an assistant response into a plausible-but-wrong variant.
+  Outcome per mutation: SURVIVED | OUTPUT CHANGED | CRASHED.
+
+Benchmark (rewind benchmark):
+  Reduce a mutation run to a fragility score = (changed + crashed) / total,
+  in [0, 1]; lower is more robust. Upsert into a ranked leaderboard
+  (leaderboard.json + index.html). A weekly GitHub Action re-scores every
+  recorded agent in replay mode and publishes the board.
+```
+
+The semantic rewriter is injected behind a protocol so tests never call a
+live model; the real implementation sends its key as the `x-goog-api-key`
+header (never a URL param) and never logs it. See
+`src/rewind/engines/semantic.py` and `src/rewind/engines/benchmark.py`.
+
 ## Request Normalization
 
 `match_key = SHA-256(canonical_json)` — inspired by Docker cagent's tool_call_id normalization.
@@ -229,6 +251,8 @@ src/rewind/
 │   ├── diff.py            # step-by-step session diff
 │   ├── bisect.py          # divergence finder + cause inference
 │   ├── explain.py         # root cause + propagation chain + confidence (rewind explain)
+│   ├── semantic.py        # LLM-driven adversarial response rewriting (mutate --semantic)
+│   ├── benchmark.py       # fragility scoring + leaderboard (rewind benchmark)
 │   ├── mutate.py          # cassette mutation testing (rewind mutate)
 │   └── cassette.py        # .rw export/import + auth-header safety check
 ├── sdk/

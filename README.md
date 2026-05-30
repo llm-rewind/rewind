@@ -54,10 +54,27 @@ errors. It re-runs your agent against each mutation and reports which
 ones the agent silently fails. Tells you where production drift will
 bite before it does.
 
+**Semantic drift.** `rewind mutate --semantic` adds a harder fault than
+any transport-level perturbation: a small model (Gemini Flash) rewrites
+a recorded response into something still fluent and on-topic but subtly
+*wrong* — a flipped recommendation, a changed number, an inverted
+conclusion. That is the failure that slips past schema checks and
+quietly corrupts agent output. The rewriter sits behind an injectable
+interface so the test suite never touches the network; its key is sent
+as a header and never logged.
+
+**Fragility leaderboard.** `rewind benchmark` reduces a mutation run to a
+single fragility score (share of injected faults that changed the agent's
+behaviour or crashed it) and writes a ranked leaderboard
+(`leaderboard.json` + `index.html`). A weekly GitHub Action
+(`.github/workflows/fragility.yml`) re-scores every recorded agent in
+replay mode and publishes the board, so robustness regressions show up as
+a rising number.
+
 Everything else (HTTPS MITM via mitmproxy, content-addressed blobs,
 SSE streaming preservation, `pytest-rewind`) is table stakes that
-existing tools also do. The cause inference and mutation harness are
-the part that justifies the project.
+existing tools also do. The cause inference, the causal explainer, and
+the mutation/benchmark harness are the part that justifies the project.
 
 ---
 
@@ -220,6 +237,8 @@ rewind diff <a> <b>                        # compare two sessions
 rewind bisect <good> <bad>                 # find divergence + classify cause
 rewind explain <good> <bad>                # root cause + downstream propagation + confidence
 rewind mutate <session-id>                 # mutation test the agent
+rewind mutate <session-id> --semantic      # add adversarial LLM-rewrite mutations
+rewind benchmark <session-id>              # score fragility, build/update leaderboard
 rewind export <session-id> [--output f.rw] # export cassette file
 rewind import <cassette.rw>                # import cassette to local DB
 rewind stats [--days 30]                   # cost analytics

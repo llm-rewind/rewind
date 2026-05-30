@@ -708,11 +708,7 @@ async def _mutate_async(
     keep_sessions: bool,
     semantic: bool = False,
 ) -> None:
-    from rewind.engines.mutate import (
-        MutationResult,
-        delete_mutated_sessions,
-        generate_mutations,
-    )
+    from rewind.engines.mutate import delete_mutated_sessions
     from rewind.engines.semantic import GeminiFlashMutator, SemanticMutator
     from rewind.exceptions import RewindSessionNotFoundError, SemanticMutatorError
     from rewind.storage.blobs import BlobStore
@@ -740,46 +736,13 @@ async def _mutate_async(
     console.print(f"[cyan]Mutation testing session {session.id[:8]}[/cyan]")
     console.print(f"  Command: [dim]{command_str}[/dim]\n")
 
-    # Baseline: run the agent against the unmutated cassette so we know
-    # what "correct" output looks like.
-    console.print("[dim]Running baseline replay...[/dim]")
-    baseline_code, baseline_out = await _run_replay(
-        db, blobs, session.id, command_str, port=_alloc_port(port), timeout=timeout
-    )
-    if baseline_code != 0:
-        console.print(
-            f"[yellow]Baseline exits non-zero ({baseline_code}). "
-            "Mutation results may be hard to interpret.[/yellow]\n"
-        )
-
-    mutations = list(generate_mutations(db, session.id, blobs=blobs, semantic_mutator=mutator))
-    if not mutations:
-        console.print("[yellow]No mutable steps in this session.[/yellow]")
-        return
-
-    console.print(f"Running {len(mutations)} mutations...\n")
-
-    results: list[MutationResult] = []
     try:
-        for m in mutations:
-            new_id = m.apply(db, blobs, session.id)
-            # Allocate a fresh port per mutation. Reusing the same port
-            # races against TIME_WAIT on the previous proxy's socket and
-            # produces "Address already in use" mid-run.
-            rc, out = await _run_replay(
-                db, blobs, new_id, command_str, port=_alloc_port(port), timeout=timeout
-            )
-            results.append(
-                MutationResult(
-                    mutation=m,
-                    mutated_session_id=new_id,
-                    exit_code=rc,
-                    stdout=out,
-                    crashed=(rc is None or rc != 0),
-                    output_changed=(out != baseline_out),
-                )
-            )
-
+        results = await _run_mutation_suite(
+            db, blobs, session, command_str, mutator=mutator, port=port, timeout=timeout
+        )
+        if not results:
+            console.print("[yellow]No mutable steps in this session.[/yellow]")
+            return
         _print_mutation_report(results)
     finally:
         # Always runs, including on KeyboardInterrupt mid-loop, so the DB
@@ -791,6 +754,73 @@ async def _mutate_async(
                     f"\n[dim]Cleaned up {removed} mutated session(s) "
                     f"(pass --keep-sessions to retain).[/dim]"
                 )
+
+
+async def _run_mutation_suite(
+    db: object,
+    blobs: object,
+    session: Session,
+    command_str: str,
+    *,
+    mutator: object,
+    port: int,
+    timeout: int,
+) -> list[MutationResult]:
+    """Run the baseline replay and every mutation, returning the results.
+
+    Shared by `rewind mutate` (which prints a report) and `rewind benchmark`
+    (which scores the results). Does not clean up mutated sessions — the caller
+    owns that, so it can choose to keep them.
+    """
+    from rewind.engines.mutate import MutationResult, generate_mutations
+    from rewind.engines.semantic import SemanticMutator
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    assert isinstance(db, RewindDB)
+    assert isinstance(blobs, BlobStore)
+    semantic_mutator = mutator if isinstance(mutator, SemanticMutator) else None
+
+    # Baseline: run the agent against the unmutated cassette so we know what
+    # "correct" output looks like.
+    console.print("[dim]Running baseline replay...[/dim]")
+    baseline_code, baseline_out = await _run_replay(
+        db, blobs, session.id, command_str, port=_alloc_port(port), timeout=timeout
+    )
+    if baseline_code != 0:
+        console.print(
+            f"[yellow]Baseline exits non-zero ({baseline_code}). "
+            "Mutation results may be hard to interpret.[/yellow]\n"
+        )
+
+    mutations = list(
+        generate_mutations(db, session.id, blobs=blobs, semantic_mutator=semantic_mutator)
+    )
+    if not mutations:
+        return []
+
+    console.print(f"Running {len(mutations)} mutations...\n")
+
+    results: list[MutationResult] = []
+    for m in mutations:
+        new_id = m.apply(db, blobs, session.id)
+        # Allocate a fresh port per mutation. Reusing the same port races
+        # against TIME_WAIT on the previous proxy's socket and produces
+        # "Address already in use" mid-run.
+        rc, out = await _run_replay(
+            db, blobs, new_id, command_str, port=_alloc_port(port), timeout=timeout
+        )
+        results.append(
+            MutationResult(
+                mutation=m,
+                mutated_session_id=new_id,
+                exit_code=rc,
+                stdout=out,
+                crashed=(rc is None or rc != 0),
+                output_changed=(out != baseline_out),
+            )
+        )
+    return results
 
 
 def _alloc_port(fallback: int) -> int:
@@ -904,6 +934,159 @@ def _print_mutation_report(results: list[MutationResult]) -> None:
             "\n[red]Crashed mutations indicate fragility. "
             "The agent does not gracefully handle these failure modes.[/red]"
         )
+
+
+@cli.command()
+@click.argument("session_id")
+@click.option(
+    "--command",
+    "override_command",
+    default=None,
+    help="Override stored command (must be the same agent that produced the session)",
+)
+@click.option(
+    "--agent-name",
+    default=None,
+    help="Name to record on the leaderboard (default: the session's agent_name)",
+)
+@click.option(
+    "--output-dir",
+    default="benchmark_site",
+    show_default=True,
+    help="Directory to write leaderboard.json + index.html",
+)
+@click.option("--port", default=DEFAULT_PROXY_PORT, show_default=True, help="Proxy listen port")
+@click.option(
+    "--timeout", default=60, show_default=True, help="Per-mutation subprocess timeout in seconds"
+)
+@click.option(
+    "--semantic",
+    is_flag=True,
+    default=False,
+    help="Include semantic-drift mutations (requires GEMINI_API_KEY/REWIND_API_KEY)",
+)
+@click.option(
+    "--keep-sessions",
+    is_flag=True,
+    default=False,
+    help="Keep mutated sessions in the local DB after the run",
+)
+def benchmark(
+    session_id: str,
+    override_command: str | None,
+    agent_name: str | None,
+    output_dir: str,
+    port: int,
+    timeout: int,
+    semantic: bool,
+    keep_sessions: bool,
+) -> None:
+    """Mutation-test an agent and publish its fragility score to a leaderboard.
+
+    Runs the same mutation suite as `rewind mutate`, then reduces the outcomes
+    to a single fragility score (share of injected faults that changed the
+    agent's behaviour or crashed it) and writes/updates a ranked leaderboard
+    (leaderboard.json + index.html) under --output-dir. Designed to run weekly
+    in CI against a set of recorded agents so robustness regressions surface as
+    a rising score.
+    """
+    asyncio.run(
+        _benchmark_async(
+            session_id,
+            override_command,
+            agent_name,
+            output_dir,
+            port,
+            timeout,
+            semantic,
+            keep_sessions,
+        )
+    )
+
+
+async def _benchmark_async(
+    session_id: str,
+    override_command: str | None,
+    agent_name: str | None,
+    output_dir: str,
+    port: int,
+    timeout: int,
+    semantic: bool,
+    keep_sessions: bool,
+) -> None:
+    import json as _json
+
+    from rewind.engines.benchmark import (
+        Leaderboard,
+        render_leaderboard_html,
+        score_results,
+    )
+    from rewind.engines.mutate import delete_mutated_sessions
+    from rewind.engines.semantic import GeminiFlashMutator, SemanticMutator
+    from rewind.exceptions import RewindSessionNotFoundError, SemanticMutatorError
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB.get_or_create()
+    blobs = BlobStore()
+
+    session = db.get_session(session_id)
+    if session is None:
+        raise RewindSessionNotFoundError(session_id)
+    command_str = override_command or session.command or ""
+    if not command_str:
+        console.print("[red]No command stored.[/red] Use --command to specify one.")
+        raise SystemExit(1)
+
+    mutator: SemanticMutator | None = None
+    if semantic:
+        try:
+            mutator = GeminiFlashMutator()
+        except SemanticMutatorError as e:
+            console.print(f"[red]Semantic mutation unavailable:[/red] {e}")
+            raise SystemExit(1) from None
+
+    name = agent_name or session.agent_name
+    console.print(f"[cyan]Benchmarking [bold]{name}[/bold] (session {session.id[:8]})[/cyan]")
+    console.print(f"  Command: [dim]{command_str}[/dim]\n")
+
+    try:
+        results = await _run_mutation_suite(
+            db, blobs, session, command_str, mutator=mutator, port=port, timeout=timeout
+        )
+        if not results:
+            console.print("[yellow]No mutable steps in this session — no score produced.[/yellow]")
+            return
+
+        score = score_results(name, results, git_hash=session.git_hash)
+
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        board_path = out_dir / "leaderboard.json"
+        if board_path.exists():
+            board = Leaderboard.from_json(_json.loads(board_path.read_text(encoding="utf-8")))
+        else:
+            board = Leaderboard()
+        board.upsert(score)
+
+        board_path.write_text(
+            _json.dumps(board.to_json(), indent=2, sort_keys=True), encoding="utf-8"
+        )
+        (out_dir / "index.html").write_text(render_leaderboard_html(board), encoding="utf-8")
+
+        console.print(
+            f"\n[bold]{name}[/bold] fragility: "
+            f"[{'red' if score.fragility_score >= 0.5 else 'green'}]"
+            f"{score.fragility_score:.1%}[/] "
+            f"(robustness {score.robustness:.1%}) over {score.total_mutations} mutations — "
+            f"survived {score.survived}, changed {score.output_changed}, crashed {score.crashed}"
+        )
+        console.print(
+            f"[dim]Leaderboard written to {board_path} and {out_dir / 'index.html'}[/dim]"
+        )
+    finally:
+        if not keep_sessions:
+            delete_mutated_sessions(db, session.id)
 
 
 @cli.command(name="export")
