@@ -38,6 +38,15 @@ diverged: was it a model version bump, a tool returning different
 output, prompt drift between deploys, or model non-determinism? Every
 other tool in the space stops at "step N differs".
 
+**Causal explanation.** `rewind explain` goes a step past `bisect`. It
+takes the first divergence as the root, then walks the rest of the trace
+to separate divergences that *propagated* from it (their inputs changed
+because upstream output flowed in) from *independent* ones (identical
+request, different response — a second root or model non-determinism). It
+reports the full chain with a heuristic confidence that the first
+divergence really is the root. "Step N differs" becomes "the model bump
+at step 3 caused steps 4 and 6; nothing else changed; confidence 0.95".
+
 **Mutation testing for agents.** `rewind mutate` is Stryker for LLM
 agents. It systematically perturbs a recorded cassette: drops steps,
 returns 429s, truncates responses, replaces tool outputs with
@@ -209,6 +218,7 @@ rewind list                                # list recorded sessions
 rewind inspect <session-id>                # inspect step details
 rewind diff <a> <b>                        # compare two sessions
 rewind bisect <good> <bad>                 # find divergence + classify cause
+rewind explain <good> <bad>                # root cause + downstream propagation + confidence
 rewind mutate <session-id>                 # mutation test the agent
 rewind export <session-id> [--output f.rw] # export cassette file
 rewind import <cassette.rw>                # import cassette to local DB

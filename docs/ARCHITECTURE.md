@@ -140,6 +140,29 @@ Input:  session_a (good run), session_b (bad run)
 4. Infer likely cause: model version change, prompt drift, tool output change
 ```
 
+## Layer 5: Explanation Engine
+
+```
+Input:  session_a (good run), session_b (bad run)
+
+1. Reuse the bisect cause inference to classify the FIRST divergence
+   as the root cause.
+2. Walk every later divergence and classify it:
+   - propagated   → its request inputs changed (req_blob differs), or it
+                    exists in only one run. The root explains it.
+   - independent  → identical request, different response. A second root
+                    or model non-determinism; the root does NOT explain it.
+3. Score a heuristic confidence that the first divergence is the true
+   root: high for explicit config changes (model/prompt/tools), low for
+   suspected non-determinism. A clean propagation chain nudges it up;
+   any independent divergence pulls it down. Capped at 0.95 — never 1.0,
+   because it is an inference, not a measurement.
+```
+
+`bisect` stops at the first divergence and its cause. `explain` answers
+the next question — what did that cause downstream, and is it actually
+the root? See `src/rewind/engines/explain.py`.
+
 ## Request Normalization
 
 `match_key = SHA-256(canonical_json)` — inspired by Docker cagent's tool_call_id normalization.
@@ -205,6 +228,7 @@ src/rewind/
 ├── engines/
 │   ├── diff.py            # step-by-step session diff
 │   ├── bisect.py          # divergence finder + cause inference
+│   ├── explain.py         # root cause + propagation chain + confidence (rewind explain)
 │   ├── mutate.py          # cassette mutation testing (rewind mutate)
 │   └── cassette.py        # .rw export/import + auth-header safety check
 ├── sdk/

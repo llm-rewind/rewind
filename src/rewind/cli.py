@@ -619,6 +619,28 @@ def bisect(session_id_a: str, session_id_b: str) -> None:
 
 
 @cli.command()
+@click.argument("session_id_a")
+@click.argument("session_id_b")
+def explain(session_id_a: str, session_id_b: str) -> None:
+    """Explain the root cause of divergence and how it propagated downstream.
+
+    Where `bisect` reports the single first divergence, `explain` builds the
+    full causal story: it classifies the originating divergence, separates the
+    later divergences it propagated to (changed inputs) from independent ones
+    (identical request, different response), and reports a heuristic confidence
+    that the first divergence is the true root.
+    """
+    from rewind.engines.explain import explain_sessions
+    from rewind.storage.blobs import BlobStore
+    from rewind.storage.db import RewindDB
+
+    db = RewindDB.get_or_create()
+    blobs = BlobStore()
+    result = explain_sessions(db, blobs, session_id_a, session_id_b)
+    console.print(result.summary())
+
+
+@cli.command()
 @click.argument("session_id")
 @click.option(
     "--command",

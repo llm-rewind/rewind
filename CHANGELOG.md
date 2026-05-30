@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- `rewind explain <good> <bad>` — causal explanation engine. Where `bisect`
+  reports the single first divergence, `explain` treats it as the root,
+  then walks the rest of the trace to separate divergences that propagated
+  from it (changed inputs) from independent ones (identical request,
+  different response). Reports the full chain with a heuristic confidence
+  (capped at 0.95) that the first divergence is the true root. New module
+  `src/rewind/engines/explain.py`; reuses the bisect cause inference.
+
 ### Planned
 
 - gRPC interception support (Gemini SDK defaults to gRPC, currently bypasses proxy)
