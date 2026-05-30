@@ -666,12 +666,23 @@ def explain(session_id_a: str, session_id_b: str) -> None:
     default=False,
     help="Keep mutated sessions in the local DB after the run (default: delete them)",
 )
+@click.option(
+    "--semantic",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also run semantic-drift mutations: a small LLM (Gemini Flash) rewrites "
+        "each assistant response into a plausible-but-wrong variant. Requires "
+        "GEMINI_API_KEY (or REWIND_API_KEY)."
+    ),
+)
 def mutate(
     session_id: str,
     override_command: str | None,
     port: int,
     timeout: int,
     keep_sessions: bool,
+    semantic: bool,
 ) -> None:
     """Mutation-test an agent against a recorded session.
 
@@ -686,7 +697,7 @@ def mutate(
     is reported as SURVIVED. Capture the agent's actual side effects
     (writes, API calls, return values) if you need a stronger oracle.
     """
-    asyncio.run(_mutate_async(session_id, override_command, port, timeout, keep_sessions))
+    asyncio.run(_mutate_async(session_id, override_command, port, timeout, keep_sessions, semantic))
 
 
 async def _mutate_async(
@@ -695,13 +706,15 @@ async def _mutate_async(
     port: int,
     timeout: int,
     keep_sessions: bool,
+    semantic: bool = False,
 ) -> None:
     from rewind.engines.mutate import (
         MutationResult,
         delete_mutated_sessions,
         generate_mutations,
     )
-    from rewind.exceptions import RewindSessionNotFoundError
+    from rewind.engines.semantic import GeminiFlashMutator, SemanticMutator
+    from rewind.exceptions import RewindSessionNotFoundError, SemanticMutatorError
     from rewind.storage.blobs import BlobStore
     from rewind.storage.db import RewindDB
 
@@ -715,6 +728,14 @@ async def _mutate_async(
     if not command_str:
         console.print("[red]No command stored.[/red] Use --command to specify one.")
         raise SystemExit(1)
+
+    mutator: SemanticMutator | None = None
+    if semantic:
+        try:
+            mutator = GeminiFlashMutator()
+        except SemanticMutatorError as e:
+            console.print(f"[red]Semantic mutation unavailable:[/red] {e}")
+            raise SystemExit(1) from None
 
     console.print(f"[cyan]Mutation testing session {session.id[:8]}[/cyan]")
     console.print(f"  Command: [dim]{command_str}[/dim]\n")
@@ -731,7 +752,7 @@ async def _mutate_async(
             "Mutation results may be hard to interpret.[/yellow]\n"
         )
 
-    mutations = list(generate_mutations(db, session.id))
+    mutations = list(generate_mutations(db, session.id, blobs=blobs, semantic_mutator=mutator))
     if not mutations:
         console.print("[yellow]No mutable steps in this session.[/yellow]")
         return

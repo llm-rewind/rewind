@@ -45,3 +45,13 @@ class RewindSessionNotFoundError(RewindError):
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         super().__init__(f"No session found matching: {session_id!r}")
+
+
+class SemanticMutatorError(RewindError):
+    """The semantic mutator (small LLM) could not rewrite a response.
+
+    Messages must never contain the API key. The Gemini key is sent as the
+    `x-goog-api-key` header, not a URL query param, so upstream httpx error
+    text and request URLs cannot leak it; this error only ever carries the
+    exception type, never the underlying request detail.
+    """

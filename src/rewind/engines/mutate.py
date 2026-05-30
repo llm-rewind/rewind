@@ -32,6 +32,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 
+from rewind.engines.semantic import (
+    SemanticMutator,
+    extract_assistant_text,
+    set_assistant_text,
+)
 from rewind.exceptions import BlobTamperedError
 from rewind.storage.blobs import BlobStore
 from rewind.storage.db import RewindDB, Session, Step
@@ -45,6 +50,7 @@ class MutationKind(StrEnum):
     TRUNCATE_RESPONSE = "truncate_response"
     ERROR_RESPONSE = "error_response"
     PROVIDER_500 = "provider_500"
+    SEMANTIC_DRIFT = "semantic_drift"
 
 
 @dataclass
@@ -72,8 +78,24 @@ class MutationResult:
     output_changed: bool = False
 
 
-def generate_mutations(db: RewindDB, session_id: str) -> Iterator[Mutation]:
-    """Walk the recorded session and yield every mutation worth running."""
+def generate_mutations(
+    db: RewindDB,
+    session_id: str,
+    *,
+    blobs: BlobStore | None = None,
+    semantic_mutator: SemanticMutator | None = None,
+) -> Iterator[Mutation]:
+    """Walk the recorded session and yield every mutation worth running.
+
+    The five syntactic mutations are always emitted. Semantic-drift mutations
+    are emitted only when ``semantic_mutator`` is supplied (it requires a live
+    model, so it is opt-in via ``rewind mutate --semantic``). They are emitted
+    only for steps whose response actually contains extractable assistant text,
+    so every yielded mutation is genuinely applicable.
+    """
+    if semantic_mutator is not None and blobs is None:
+        raise ValueError("blobs is required when semantic_mutator is provided")
+
     steps = db.get_steps(session_id)
     if not steps:
         return
@@ -88,6 +110,25 @@ def generate_mutations(db: RewindDB, session_id: str) -> Iterator[Mutation]:
         yield _truncate_response_mutation(idx)
         yield _error_response_mutation(idx)
         yield _provider_500_mutation(idx)
+
+        if (
+            semantic_mutator is not None
+            and blobs is not None
+            and _step_has_assistant_text(blobs, step)
+        ):
+            yield _semantic_drift_mutation(idx, semantic_mutator)
+
+
+def _step_has_assistant_text(blobs: BlobStore, step: Step) -> bool:
+    """True if the step's response blob holds editable assistant text."""
+    if step.resp_blob is None:
+        return False
+    try:
+        payload = json.loads(blobs.read(step.resp_blob))
+        body = json.loads(payload["body"]) if isinstance(payload.get("body"), str) else None
+    except (BlobTamperedError, json.JSONDecodeError, ValueError, KeyError, TypeError):
+        return False
+    return isinstance(body, dict) and extract_assistant_text(body) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -185,9 +226,65 @@ def _provider_500_mutation(idx: int) -> Mutation:
     )
 
 
+def _semantic_drift_mutation(idx: int, mutator: SemanticMutator) -> Mutation:
+    def apply(db: RewindDB, blobs: BlobStore, base_id: str) -> str:
+        # The mutator (a live model) runs here, at apply time — not during
+        # generation — so no network call happens until a mutation is actually
+        # materialised for a run.
+        return _materialise(
+            db,
+            blobs,
+            base_id,
+            mutate_fn=lambda steps: _rewrite_resp(
+                blobs, steps, idx, lambda payload: _semantic_payload(payload, mutator)
+            ),
+            suffix=f"semantic-{idx}",
+        )
+
+    return Mutation(
+        kind=MutationKind.SEMANTIC_DRIFT,
+        target_order_idx=idx,
+        description=(
+            f"step {idx} assistant text rewritten to a plausible-but-wrong variant "
+            "(adversarial semantic drift)"
+        ),
+        _materialiser=apply,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Payload rewrites
 # ---------------------------------------------------------------------------
+
+
+def _semantic_payload(original: dict[str, object], mutator: SemanticMutator) -> dict[str, object]:
+    """Rewrite the assistant text inside a wrapped response payload.
+
+    `original` is the stored response blob shape: {"status_code", "headers",
+    "body": "<provider json as string>"}. We parse the body, drift its
+    assistant text via the mutator, and re-serialise. If the body is not a
+    recognised provider shape the payload is returned unchanged.
+    """
+    body_str = original.get("body")
+    if not isinstance(body_str, str):
+        return original
+    try:
+        provider_body = json.loads(body_str)
+    except (json.JSONDecodeError, ValueError):
+        return original
+    if not isinstance(provider_body, dict):
+        return original
+
+    text = extract_assistant_text(provider_body)
+    if text is None:
+        return original
+
+    drifted = mutator.rewrite(text)
+    new_provider_body = set_assistant_text(provider_body, drifted)
+
+    payload = copy.deepcopy(original)
+    payload["body"] = json.dumps(new_provider_body)
+    return payload
 
 
 def _empty_payload(original: dict[str, object]) -> dict[str, object]:

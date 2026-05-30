@@ -65,6 +65,14 @@ MODEL_COSTS: dict[str, tuple[float, float]] = {
     "gemini-2.0-flash": (0.0001, 0.0004),
 }
 
+# Semantic mutation — small, cheap model used to rewrite recorded responses
+# into plausible-but-wrong variants (rewind mutate --semantic). Gemini Flash
+# is fast and cheap; its key is sent via the x-goog-api-key header so it never
+# lands in a URL, log, or error message.
+SEMANTIC_MUTATOR_MODEL = "gemini-2.0-flash"
+SEMANTIC_MUTATOR_HOST = "generativelanguage.googleapis.com"
+SEMANTIC_MUTATOR_TIMEOUT_S = 30.0
+
 # CA certificate
 CA_KEY_BITS = 4096
 CA_CERT_DAYS = 365
