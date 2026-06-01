@@ -43,7 +43,7 @@ jobs:
         run: python scripts/run_fragility_benchmark.py --output-dir benchmark_site
 
       - name: Upload leaderboard artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fragility-leaderboard
           path: benchmark_site/
